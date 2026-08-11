@@ -30,12 +30,35 @@ class Config:
             _env("GDRIVE_SERVICE_ACCOUNT_JSON", "./credentials/gdrive-sa.json")
         )
     )
+    # ID of the MentahanPOV project ROOT folder (the one containing
+    # "01 - Suasana Jalan & Perjalanan", "02 - Cuaca & Hujan", etc).
     gdrive_folder_id: str = field(default_factory=lambda: _env("GDRIVE_FOLDER_ID"))
+    # Pipe-separated (folder names may contain commas). Must match the
+    # actual subfolder names under GDRIVE_FOLDER_ID exactly.
+    drive_categories: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            c.strip()
+            for c in _env(
+                "DRIVE_CATEGORIES",
+                "01 - Suasana Jalan & Perjalanan|"
+                "02 - Cuaca & Hujan|"
+                "03 - Alam, Hewan & ASMR|"
+                "04 - Raw Photos & Textures|"
+                "05 - Timelapse Assets",
+            ).split("|")
+            if c.strip()
+        )
+    )
 
     # Gemini
     gemini_api_key: str = field(default_factory=lambda: _env("GEMINI_API_KEY"))
     gemini_model: str = field(
         default_factory=lambda: _env("GEMINI_MODEL", "gemini-2.5-flash")
+    )
+
+    # Reverse geocoding (GPS -> human-readable address)
+    google_maps_api_key: str = field(
+        default_factory=lambda: _env("GOOGLE_MAPS_API_KEY")
     )
 
     # YouTube

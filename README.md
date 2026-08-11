@@ -2,13 +2,15 @@
 
 A local Python pipeline for **MentahanPOV** raw video archive. One command takes a local video file and:
 
-1. Uploads it to Google Drive (anyone-with-link readable).
-2. Asks Gemini to produce SOP V3 metadata (visual analysis + vibes-only caption + cloud storage ref).
-3. Cross-posts to **YouTube Shorts**, **Facebook Page**, **Instagram Reels**, and **TikTok**.
-4. Persists per-platform status to a JSON state file so reruns only retry the failed ones.
+1. Reads ground-truth facts straight from the file: recording date, duration, resolution, and GPS (if the phone embedded it — no screenshot needed).
+2. Reverse-geocodes the GPS into a street address.
+3. Asks Gemini to produce SOP V3 metadata (title, vibes caption, Drive category, and a standardized filename) as strict JSON — Gemini never invents the facts, only the creative bits.
+4. Uploads the video to the matching Drive category folder, renamed to the generated filename.
+5. Cross-posts to **YouTube Shorts**, **Facebook Page**, **Instagram Reels**, and **TikTok**.
+6. Persists per-platform status to a JSON state file so reruns only retry the failed ones.
 
 ```text
-video file ─► GDrive upload ─► Gemini SOP V3 ─► fan-out to 4 platforms ─► state log
+video file ─► ffprobe facts ─► reverse geocode ─► Gemini SOP V3 (JSON) ─► GDrive upload (renamed, correct folder) ─► fan-out to 4 platforms ─► state log
 ```
 
 ## Project layout
@@ -18,8 +20,10 @@ mentahanpov/
 ├── main.py                  # CLI entry point
 ├── config.py                # env loader + typed config
 ├── core/
-│   ├── gdrive.py            # Drive upload + share + URL
-│   ├── gemini.py            # SOP V3 caption generator
+│   ├── video_facts.py       # ffprobe: date, duration, resolution, GPS
+│   ├── geocode.py           # GPS -> street address (Google Geocoding API)
+│   ├── gdrive.py            # Drive upload + folder resolution + share + URL
+│   ├── gemini.py            # SOP V3 caption/filename/folder generator (JSON)
 │   └── state.py             # idempotent JSON state log
 ├── distributors/
 │   ├── youtube.py           # YouTube Data API v3
@@ -35,7 +39,7 @@ mentahanpov/
 ## Prerequisites
 
 - Python 3.10+
-- `ffmpeg` (optional, only if you want to pre-validate videos)
+- `ffmpeg` / `ffprobe` (**required** — used to read date/duration/resolution/GPS straight from the video file)
 - A Google Cloud project (free tier is fine)
 - Meta for Developers account
 - TikTok account
@@ -82,13 +86,16 @@ Each section below ends with the `.env` keys it populates.
 3. **IAM & Admin → Service Accounts → + CREATE SERVICE ACCOUNT**. Skip the optional roles step.
 4. Open the service account → **Keys → Add Key → JSON**. Save the file as `credentials/gdrive-sa.json`.
 5. Note the service-account email (looks like `mentahan-uploader@<project>.iam.gserviceaccount.com`).
-6. In Drive (web), create a folder e.g. `MentahanPOV/uploads`. Right-click → **Share** → paste the service-account email, role **Editor**.
-7. Open the folder; copy the ID from the URL: `drive.google.com/drive/folders/<THIS_IS_THE_ID>`.
+6. In Drive (web), share your **MentahanPOV project root folder** (the one containing `01 - Suasana Jalan & Perjalanan`, `02 - Cuaca & Hujan`, etc) with that service-account email, role **Editor**. All existing category subfolders inherit the share automatically.
+7. Open the root folder; copy the ID from the URL: `drive.google.com/drive/folders/<THIS_IS_THE_ID>`.
 
 ```env
 GDRIVE_SERVICE_ACCOUNT_JSON=./credentials/gdrive-sa.json
-GDRIVE_FOLDER_ID=<paste folder id>
+GDRIVE_FOLDER_ID=<paste root folder id>
+DRIVE_CATEGORIES=01 - Suasana Jalan & Perjalanan|02 - Cuaca & Hujan|03 - Alam, Hewan & ASMR|04 - Raw Photos & Textures|05 - Timelapse Assets
 ```
+
+> The service account uses the full `drive` scope (not just `drive.file`) so it can list the category subfolders under the root and pick the right one — not just write new files blindly.
 
 ### 2. Gemini (Google AI Studio)
 
@@ -100,9 +107,20 @@ GEMINI_API_KEY=<paste key>
 GEMINI_MODEL=gemini-2.0-flash-exp
 ```
 
-> The pipeline uploads the video to the Gemini File API, waits for it to become `ACTIVE`, then asks the model for SOP V3 metadata. Files in the File API expire after 48 hours — that's fine for one-shot runs.
+> The pipeline uploads the video to the Gemini File API, waits for it to become `ACTIVE`, then asks the model for SOP V3 metadata as strict JSON (`caption`, `file_name`, `folder`). Files in the File API expire after 48 hours — that's fine for one-shot runs. Gemini is only asked for the creative parts (title, vibe, hashtags, folder pick); date/address/duration/resolution are supplied as ground truth so it can't hallucinate them.
 
-### 3. YouTube Data API v3 (OAuth2 installed-app)
+### 3. Reverse geocoding (GPS → address)
+
+1. In the same GCP project, **APIs & Services → Library** → enable **Geocoding API**.
+2. **APIs & Services → Credentials → + CREATE CREDENTIALS → API key**. Restrict it to the Geocoding API.
+
+```env
+GOOGLE_MAPS_API_KEY=<paste key>
+```
+
+> If a video has no GPS in its metadata (phone location was off, or the file was re-encoded), or this key is left empty, the caption falls back to raw coordinates / "Lokasi tidak tersedia" instead of a street address.
+
+### 4. YouTube Data API v3 (OAuth2 installed-app)
 
 1. In the **same** GCP project, **APIs & Services → Library** → enable **YouTube Data API v3**.
 2. **OAuth consent screen** → External → fill in app name, support email, dev contact. Add yourself as a Test User.
@@ -118,7 +136,7 @@ YOUTUBE_CATEGORY_ID=22
 
 > The uploader auto-appends `#Shorts` so vertical ≤60s videos are recognised as Shorts.
 
-### 4. Facebook Page + Instagram Reels (Graph API)
+### 5. Facebook Page + Instagram Reels (Graph API)
 
 You need:
 - A Facebook Page (not a personal profile).
@@ -158,7 +176,7 @@ GRAPH_API_VERSION=v19.0
 
 > **Important for Instagram:** the API needs a **public HTTPS** URL pointing at the raw video. The pipeline passes the GDrive direct-download URL — works fine for short Reels (<300 MB). For larger files or higher reliability, replace `_drive_direct()` in `distributors/instagram.py` with an upload to S3/R2/Cloudinary.
 
-### 5. TikTok (Playwright fallback)
+### 6. TikTok (Playwright fallback)
 
 The official **Content Posting API** requires app-review approval. While you wait (or if you don't want to apply), this pipeline drives TikTok Studio with Playwright.
 
@@ -190,9 +208,9 @@ python main.py VIDEO [--platforms list] [--dry-run] [--skip-gdrive] [--skip-gemi
 | Flag | Effect |
 |---|---|
 | `--platforms`     | Subset of `youtube,facebook,instagram,tiktok`. Default = `PLATFORMS` env. |
-| `--dry-run`       | Run GDrive + Gemini, **skip** all distribution. |
+| `--dry-run`       | Run facts + geocode + Gemini + GDrive, **skip** all distribution. |
 | `--skip-gdrive`   | Reuse `gdrive_url` from state (re-run after fixing a single platform). |
-| `--skip-gemini`   | Reuse caption from state. |
+| `--skip-gemini`   | Reuse caption/file_name/folder from state. |
 | `--force`         | Repost even if a platform already succeeded. |
 | `-v / --verbose`  | DEBUG-level logging. |
 
@@ -207,7 +225,7 @@ python main.py VIDEO [--platforms list] [--dry-run] [--skip-gdrive] [--skip-gemi
     "gdrive_id": "1xyz...",
     "gdrive_url": "https://drive.google.com/file/d/1xyz/view",
     "caption": "...",
-    "gemini": { "visual_analysis": "...", "draft_caption": "...", "cloud_storage": "..." },
+    "gemini": { "file_name": "20260403_MALANG_MOSQUE_JUMATAN_VIBE_32s_1080p.mp4", "folder": "01 - Suasana Jalan & Perjalanan" },
     "platforms": {
       "youtube":   { "status": "ok",    "url": "https://youtube.com/shorts/abc", "error": null },
       "facebook":  { "status": "ok",    "url": "...", "error": null },
