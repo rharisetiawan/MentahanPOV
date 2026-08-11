@@ -61,6 +61,24 @@ class Config:
         default_factory=lambda: _env("GOOGLE_MAPS_API_KEY")
     )
 
+    # Watermark / posting-copy rendering
+    watermark_logo_path: Path = field(
+        default_factory=lambda: Path(
+            _env("WATERMARK_LOGO_PATH", "./assets/watermark-logo.png")
+        )
+    )
+    watermark_opacity: float = field(
+        default_factory=lambda: float(_env("WATERMARK_OPACITY", "0.35"))
+    )
+    watermark_width_px: int = field(
+        default_factory=lambda: int(_env("WATERMARK_WIDTH_PX", "260"))
+    )
+    posting_copy_dir: Path = field(
+        default_factory=lambda: Path(
+            _env("POSTING_COPY_DIR", "./state/posting_copies")
+        )
+    )
+
     # YouTube
     youtube_client_secrets: Path = field(
         default_factory=lambda: Path(

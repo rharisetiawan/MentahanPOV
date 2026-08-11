@@ -2,6 +2,7 @@
 python-dotenv>=1.0.0
 tenacity>=8.2.0
 requests>=2.31.0
+Pillow>=10.0.0  # placeholder watermark text render (core/watermark.py)
 
 # Google APIs (Drive + YouTube)
 google-api-python-client>=2.120.0

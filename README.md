@@ -5,12 +5,14 @@ A local Python pipeline for **MentahanPOV** raw video archive. One command takes
 1. Reads ground-truth facts straight from the file: recording date, duration, resolution, and GPS (if the phone embedded it — no screenshot needed).
 2. Reverse-geocodes the GPS into a street address.
 3. Asks Gemini to produce SOP V3 metadata (title, vibes caption, Drive category, and a standardized filename) as strict JSON — Gemini never invents the facts, only the creative bits.
-4. Uploads the video to the matching Drive category folder, renamed to the generated filename.
-5. Cross-posts to **YouTube Shorts**, **Facebook Page**, **Instagram Reels**, and **TikTok**.
-6. Persists per-platform status to a JSON state file so reruns only retry the failed ones.
+4. Uploads the **untouched master** to the matching Drive category folder, renamed to the generated filename.
+5. Renders a watermarked, feed-sized **posting copy** (capped at 1080p, thin logo in the corner) — this is what actually goes out to platforms, never the raw master.
+6. Cross-posts the posting copy to **YouTube Shorts**, **Facebook Page**, **Instagram Reels**, and **TikTok**.
+7. Persists per-platform status to a JSON state file so reruns only retry the failed ones.
 
 ```text
-video file ─► ffprobe facts ─► reverse geocode ─► Gemini SOP V3 (JSON) ─► GDrive upload (renamed, correct folder) ─► fan-out to 4 platforms ─► state log
+video file ─► ffprobe facts ─► reverse geocode ─► Gemini SOP V3 (JSON) ─► GDrive upload (master, renamed, correct folder)
+                                                                        └► watermark render (posting copy) ─► fan-out to 4 platforms ─► state log
 ```
 
 ## Project layout
@@ -24,7 +26,9 @@ mentahanpov/
 │   ├── geocode.py           # GPS -> street address (Google Geocoding API)
 │   ├── gdrive.py            # Drive upload + folder resolution + share + URL
 │   ├── gemini.py            # SOP V3 caption/filename/folder generator (JSON)
+│   ├── watermark.py         # master -> watermarked, feed-sized posting copy
 │   └── state.py             # idempotent JSON state log
+├── assets/                  # watermark-logo.png lives here (auto-placeholder if missing)
 ├── distributors/
 │   ├── youtube.py           # YouTube Data API v3
 │   ├── facebook.py          # Graph API /{page}/videos
@@ -197,22 +201,45 @@ The official **Content Posting API** requires app-review approval. While you wai
 
 > TikTok occasionally redesigns the upload page, which can break selectors. If `post()` raises "Could not find file input / caption box", run the login flow again and watch how the page renders — the selectors at the top of `distributors/tiktok.py` are easy to update.
 
+### 7. Watermark logo
+
+Nothing to configure — the first run auto-generates a placeholder
+"MentahanPOV" text logo at `WATERMARK_LOGO_PATH` (default
+`./assets/watermark-logo.png`) using Pillow. Whenever your real logo is
+ready, just overwrite that exact file with a transparent PNG; the next run
+picks it up automatically.
+
+> Watermarking always uses ffmpeg's `overlay` filter on this PNG, never
+> `drawtext` — plenty of ffmpeg builds (including a stock Homebrew one)
+> ship without freetype/fontconfig, which makes `drawtext` silently
+> unavailable. Check yours with `ffmpeg -hide_banner -filters | grep drawtext`;
+> if that prints nothing, the placeholder-PNG approach here is exactly why
+> it still works.
+
+```env
+WATERMARK_LOGO_PATH=./assets/watermark-logo.png
+WATERMARK_OPACITY=0.35
+WATERMARK_WIDTH_PX=260
+POSTING_COPY_DIR=./state/posting_copies
+```
+
 ---
 
 ## CLI reference
 
 ```text
-python main.py VIDEO [--platforms list] [--dry-run] [--skip-gdrive] [--skip-gemini] [--force] [-v]
+python main.py VIDEO [--platforms list] [--dry-run] [--skip-gdrive] [--skip-gemini] [--skip-watermark] [--force] [-v]
 ```
 
 | Flag | Effect |
 |---|---|
-| `--platforms`     | Subset of `youtube,facebook,instagram,tiktok`. Default = `PLATFORMS` env. |
-| `--dry-run`       | Run facts + geocode + Gemini + GDrive, **skip** all distribution. |
-| `--skip-gdrive`   | Reuse `gdrive_url` from state (re-run after fixing a single platform). |
-| `--skip-gemini`   | Reuse caption/file_name/folder from state. |
-| `--force`         | Repost even if a platform already succeeded. |
-| `-v / --verbose`  | DEBUG-level logging. |
+| `--platforms`      | Subset of `youtube,facebook,instagram,tiktok`. Default = `PLATFORMS` env. |
+| `--dry-run`        | Run facts + geocode + Gemini + GDrive, **skip** watermark render + all distribution. |
+| `--skip-gdrive`    | Reuse `gdrive_url` from state (re-run after fixing a single platform). |
+| `--skip-gemini`    | Reuse caption/file_name/folder from state. |
+| `--skip-watermark` | Reuse the cached posting copy from state instead of re-rendering it. |
+| `--force`          | Repost even if a platform already succeeded. |
+| `-v / --verbose`   | DEBUG-level logging. |
 
 ### State file
 
@@ -226,6 +253,7 @@ python main.py VIDEO [--platforms list] [--dry-run] [--skip-gdrive] [--skip-gemi
     "gdrive_url": "https://drive.google.com/file/d/1xyz/view",
     "caption": "...",
     "gemini": { "file_name": "20260403_MALANG_MOSQUE_JUMATAN_VIBE_32s_1080p.mp4", "folder": "01 - Suasana Jalan & Perjalanan" },
+    "posting_copy_path": "./state/posting_copies/a1b2c3d4e5f6_post.mp4",
     "platforms": {
       "youtube":   { "status": "ok",    "url": "https://youtube.com/shorts/abc", "error": null },
       "facebook":  { "status": "ok",    "url": "...", "error": null },

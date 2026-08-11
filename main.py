@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 from config import config
-from core import gdrive, geocode, gemini, state, video_facts
+from core import gdrive, geocode, gemini, state, video_facts, watermark
 from distributors import facebook, instagram, tiktok, youtube
 
 log = logging.getLogger("mentahanpov")
@@ -58,6 +58,11 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--skip-gemini", action="store_true", help="Reuse caption from state file."
+    )
+    p.add_argument(
+        "--skip-watermark",
+        action="store_true",
+        help="Reuse cached posting copy from state file.",
     )
     p.add_argument(
         "--force",
@@ -134,8 +139,25 @@ def step_gdrive(
     return info["view_url"]
 
 
+def step_watermark(video: Path, *, skip: bool) -> Path:
+    entry = state.get(config.state_file, video)
+    cached = entry.get("posting_copy_path")
+    if skip and cached and Path(cached).exists():
+        log.info("[watermark] reusing cached posting copy: %s", cached)
+        return Path(cached)
+    out_path = config.posting_copy_dir / f"{state.video_key(video)}_post.mp4"
+    watermark.make_posting_copy(video, output_path=out_path)
+    state.update(config.state_file, video, {"posting_copy_path": str(out_path)})
+    return out_path
+
+
 def step_distribute(
-    video: Path, caption: str, gdrive_url: str, platforms: list[str], force: bool
+    video: Path,
+    post_video: Path,
+    caption: str,
+    gdrive_url: str,
+    platforms: list[str],
+    force: bool,
 ) -> None:
     for name in platforms:
         if name not in PLATFORM_REGISTRY:
@@ -148,7 +170,7 @@ def step_distribute(
             continue
         try:
             log.info("[%s] posting…", name)
-            result = PLATFORM_REGISTRY[name](video, caption, gdrive_url=gdrive_url)
+            result = PLATFORM_REGISTRY[name](post_video, caption, gdrive_url=gdrive_url)
             state.mark_platform(
                 config.state_file,
                 video,
@@ -194,10 +216,13 @@ def main() -> int:
     log.info("GDrive URL: %s", gdrive_url)
 
     if args.dry_run:
-        log.info("--dry-run set; skipping distribution.")
+        log.info("--dry-run set; skipping watermark render + distribution.")
         return 0
 
-    step_distribute(video, gemini_out.caption, gdrive_url, platforms, args.force)
+    post_video = step_watermark(video, skip=args.skip_watermark)
+    log.info("Posting copy ready: %s", post_video)
+
+    step_distribute(video, post_video, gemini_out.caption, gdrive_url, platforms, args.force)
 
     final = state.get(config.state_file, video)
     log.info("Final state: %s", final.get("platforms"))
