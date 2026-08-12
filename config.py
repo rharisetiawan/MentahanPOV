@@ -24,10 +24,11 @@ def _env(key: str, default: str | None = None, *, required: bool = False) -> str
 
 @dataclass(frozen=True)
 class Config:
-    # GDrive
-    gdrive_sa_json: Path = field(
+    # GDrive (OAuth2 installed-app — reuses the YouTube client secrets below,
+    # since service accounts can't write to regular "My Drive" folders)
+    gdrive_token_file: Path = field(
         default_factory=lambda: Path(
-            _env("GDRIVE_SERVICE_ACCOUNT_JSON", "./credentials/gdrive-sa.json")
+            _env("GDRIVE_TOKEN_FILE", "./credentials/gdrive-token.json")
         )
     )
     # ID of the MentahanPOV project ROOT folder (the one containing
@@ -54,11 +55,6 @@ class Config:
     gemini_api_key: str = field(default_factory=lambda: _env("GEMINI_API_KEY"))
     gemini_model: str = field(
         default_factory=lambda: _env("GEMINI_MODEL", "gemini-2.5-flash")
-    )
-
-    # Reverse geocoding (GPS -> human-readable address)
-    google_maps_api_key: str = field(
-        default_factory=lambda: _env("GOOGLE_MAPS_API_KEY")
     )
 
     # Watermark / posting-copy rendering

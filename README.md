@@ -83,23 +83,24 @@ python main.py /path/to/video.mp4 --platforms youtube,instagram
 
 Each section below ends with the `.env` keys it populates.
 
-### 1. Google Drive (Service Account)
+### 1. Google Drive (OAuth2 installed-app)
 
-1. Open <https://console.cloud.google.com/>, create or pick a project.
-2. **APIs & Services → Library** → enable **Google Drive API**.
-3. **IAM & Admin → Service Accounts → + CREATE SERVICE ACCOUNT**. Skip the optional roles step.
-4. Open the service account → **Keys → Add Key → JSON**. Save the file as `credentials/gdrive-sa.json`.
-5. Note the service-account email (looks like `mentahan-uploader@<project>.iam.gserviceaccount.com`).
-6. In Drive (web), share your **MentahanPOV project root folder** (the one containing `01 - Suasana Jalan & Perjalanan`, `02 - Cuaca & Hujan`, etc) with that service-account email, role **Editor**. All existing category subfolders inherit the share automatically.
-7. Open the root folder; copy the ID from the URL: `drive.google.com/drive/folders/<THIS_IS_THE_ID>`.
+Service accounts have **zero storage quota** on regular "My Drive" folders
+— Google only lets them write into paid Shared Drives — so this uploads
+as your own account instead, via the same OAuth client used for YouTube
+(section 4 below creates it; do that first if starting from scratch).
+
+1. Open <https://console.cloud.google.com/>, create or pick a project, and enable **Google Drive API** (**APIs & Services → Library**).
+2. Follow section 4 below to create the **Desktop** OAuth client if you haven't yet — Drive reuses that same `credentials/youtube-oauth.json`.
+3. Open your **MentahanPOV project root folder** in Drive (the one containing `01 - Suasana Jalan & Perjalanan`, `02 - Cuaca & Hujan`, etc); copy the ID from the URL: `drive.google.com/drive/folders/<THIS_IS_THE_ID>`.
 
 ```env
-GDRIVE_SERVICE_ACCOUNT_JSON=./credentials/gdrive-sa.json
+GDRIVE_TOKEN_FILE=./credentials/gdrive-token.json
 GDRIVE_FOLDER_ID=<paste root folder id>
 DRIVE_CATEGORIES=01 - Suasana Jalan & Perjalanan|02 - Cuaca & Hujan|03 - Alam, Hewan & ASMR|04 - Raw Photos & Textures|05 - Timelapse Assets
 ```
 
-> The service account uses the full `drive` scope (not just `drive.file`) so it can list the category subfolders under the root and pick the right one — not just write new files blindly.
+> First run opens a browser for consent (separately from the YouTube one, since it's a different scope) — click Allow, then the token is cached in `GDRIVE_TOKEN_FILE` and refreshes automatically after that.
 
 ### 2. Gemini (Google AI Studio)
 
@@ -115,14 +116,13 @@ GEMINI_MODEL=gemini-2.0-flash-exp
 
 ### 3. Reverse geocoding (GPS → address)
 
-1. In the same GCP project, **APIs & Services → Library** → enable **Geocoding API**.
-2. **APIs & Services → Credentials → + CREATE CREDENTIALS → API key**. Restrict it to the Geocoding API.
+Nothing to configure. `core/geocode.py` uses OpenStreetMap's free Nominatim
+service — no API key, no billing account (unlike Google's Geocoding API,
+which requires a billing account attached even within its free tier).
 
-```env
-GOOGLE_MAPS_API_KEY=<paste key>
-```
-
-> If a video has no GPS in its metadata (phone location was off, or the file was re-encoded), or this key is left empty, the caption falls back to raw coordinates / "Lokasi tidak tersedia" instead of a street address.
+> If a video has no GPS in its metadata (phone location was off, or the
+> file was re-encoded), the caption falls back to raw coordinates /
+> "Lokasi tidak tersedia" instead of a street address.
 
 ### 4. YouTube Data API v3 (OAuth2 installed-app)
 
@@ -282,5 +282,5 @@ Re-running `main.py` on the same file will skip every platform whose status is `
 ## Security notes
 
 - `.env`, `credentials/`, and `state/` are git-ignored. Never commit them.
-- The GDrive folder ID is *not* a secret, but the service-account JSON is — treat it like a password.
+- The GDrive folder ID is *not* a secret, but the OAuth client secret and cached tokens (`credentials/*.json`) are — treat them like passwords.
 - The Page Access Token is long-lived (~60 days). Rotate it on a schedule.

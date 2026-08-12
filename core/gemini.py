@@ -15,7 +15,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import config
@@ -50,14 +51,16 @@ def _load_prompt(
     )
 
 
-def _wait_active(file: "genai.types.File", timeout: int = 300) -> None:
+def _wait_active(
+    client: "genai.Client", file: "genai_types.File", timeout: int = 300
+) -> None:
     """Poll until uploaded video is ACTIVE (Gemini File API processes async)."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        f = genai.get_file(file.name)
-        if f.state.name == "ACTIVE":
+        f = client.files.get(name=file.name)
+        if f.state == "ACTIVE":
             return
-        if f.state.name == "FAILED":
+        if f.state == "FAILED":
             raise RuntimeError(f"Gemini file {file.name} failed processing")
         time.sleep(3)
     raise TimeoutError(f"Gemini file {file.name} not ACTIVE after {timeout}s")
@@ -84,11 +87,11 @@ def generate_metadata(
 ) -> GeminiOutput:
     if not config.gemini_api_key:
         raise RuntimeError("GEMINI_API_KEY is empty. See README → 'Gemini setup'.")
-    genai.configure(api_key=config.gemini_api_key)
+    client = genai.Client(api_key=config.gemini_api_key)
 
     log.info("[gemini] uploading %s to File API", video_path.name)
-    file = genai.upload_file(path=str(video_path), display_name=video_path.name)
-    _wait_active(file)
+    file = client.files.upload(file=str(video_path))
+    _wait_active(client, file)
 
     prompt = _load_prompt(
         date=date,
@@ -97,16 +100,16 @@ def generate_metadata(
         duration_s=duration_s,
         resolution=resolution,
     )
-    model = genai.GenerativeModel(config.gemini_model)
     log.info("[gemini] generating SOP V3 metadata with %s", config.gemini_model)
 
-    response = model.generate_content(
-        [file, prompt],
-        generation_config={
-            "temperature": 0.85,
-            "top_p": 0.95,
-            "response_mime_type": "application/json",
-        },
+    response = client.models.generate_content(
+        model=config.gemini_model,
+        contents=[file, prompt],
+        config=genai_types.GenerateContentConfig(
+            temperature=0.85,
+            top_p=0.95,
+            response_mime_type="application/json",
+        ),
     )
     raw = response.text or ""
     log.debug("[gemini] raw response:\n%s", raw)
