@@ -131,6 +131,16 @@ class Config:
             p.strip() for p in _env("TELEGRAM_PLATFORMS", "").split(",") if p.strip()
         )
     )
+    # From https://my.telegram.org -> API development tools. Only needed to
+    # run a Local Bot API Server (see README) — the default api.telegram.org
+    # caps file downloads at 20MB, too small for raw phone footage.
+    telegram_api_id: str = field(default_factory=lambda: _env("TELEGRAM_API_ID"))
+    telegram_api_hash: str = field(default_factory=lambda: _env("TELEGRAM_API_HASH"))
+    # Base URL of a running Local Bot API Server. Used automatically once
+    # TELEGRAM_API_ID/HASH are set; override if it's not on localhost:8081.
+    telegram_local_api_url: str = field(
+        default_factory=lambda: _env("TELEGRAM_LOCAL_API_URL", "http://localhost:8081")
+    )
 
     # Orchestration
     platforms: tuple[str, ...] = field(

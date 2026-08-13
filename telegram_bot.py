@@ -25,7 +25,6 @@ import ast
 import asyncio
 import logging
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -39,8 +38,30 @@ log = logging.getLogger("mentahanpov.bot")
 REPO_ROOT = Path(__file__).parent
 INCOMING_DIR = REPO_ROOT / "incoming"
 PIPELINE_TIMEOUT_S = 15 * 60  # generous — Gemini + 3 uploads can take a while
+STATUS_TICK_S = 3  # how often the status message is allowed to be edited
 
 _FINAL_STATE_RE = re.compile(r"Final state: (\{.*\})\s*$")
+
+# Substring -> friendly status text. Checked in order against every log
+# line as it streams in; the last match found "wins" as the current stage.
+_STAGE_PATTERNS: list[tuple[str, str]] = [
+    ("[facts]", "📼 Baca metadata video (GPS, durasi, resolusi)..."),
+    ("Location:", "📍 Alamat ketemu dari GPS, lanjut ke Gemini..."),
+    ("[gemini] uploading", "🤖 Upload video ke Gemini..."),
+    ("[gemini] generating", "🤖 Gemini mikirin caption + nama file..."),
+    ("Folder:", "🤖 Caption jadi, lanjut upload ke Drive..."),
+    ("[gdrive] uploading", "☁️ Upload video HD ke Google Drive..."),
+    ("[gdrive] uploaded id=", "☁️ Upload Drive selesai..."),
+    ("[watermark] rendering", "🎨 Render watermark..."),
+    ("Posting copy ready", "🎨 Watermark selesai, mulai posting..."),
+    ("[youtube] posting", "📤 Posting ke YouTube..."),
+    ("[youtube] OK", "✅ YouTube beres, lanjut ke platform berikutnya..."),
+    ("[facebook] posting", "📤 Posting ke Facebook..."),
+    ("[facebook] OK", "✅ Facebook beres, lanjut ke platform berikutnya..."),
+    ("[instagram] posting", "📤 Posting ke Instagram..."),
+    ("[instagram] OK", "✅ Instagram beres..."),
+    ("[tiktok] posting", "📤 Posting ke TikTok..."),
+]
 
 
 def _allowed(user_id: int) -> bool:
@@ -50,8 +71,11 @@ def _allowed(user_id: int) -> bool:
 
 
 def _format_result(returncode: int, stdout: str, stderr: str) -> str:
+    # main.py's logging.basicConfig() defaults to stderr, not stdout — the
+    # "Final state: {...}" summary line lives there, so both must be
+    # searched (or it's silently "not found" even on a full success).
     match = None
-    for line in stdout.splitlines():
+    for line in (stdout + "\n" + stderr).splitlines():
         m = _FINAL_STATE_RE.search(line)
         if m:
             match = m
@@ -76,19 +100,54 @@ def _format_result(returncode: int, stdout: str, stderr: str) -> str:
     return f"Proses {status}, tapi gak nemu ringkasan hasil. Log terakhir:\n```\n{tail}\n```"
 
 
-def _run_pipeline(video_path: Path) -> str:
-    args = [sys.executable, "main.py", str(video_path)]
+async def _run_pipeline(video_path: Path, status_msg) -> str:
+    args = [sys.executable, "-u", "main.py", str(video_path)]
     if config.telegram_platforms:
         args += ["--platforms", ",".join(config.telegram_platforms)]
     log.info("[bot] running: %s", " ".join(args))
-    proc = subprocess.run(
-        args,
+
+    proc = await asyncio.create_subprocess_exec(
+        *args,
         cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=PIPELINE_TIMEOUT_S,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
     )
-    return _format_result(proc.returncode, proc.stdout, proc.stderr)
+
+    lines: list[str] = []
+    state = {"stage": None, "shown": None}
+
+    async def _read_stream() -> None:
+        assert proc.stdout is not None
+        async for raw in proc.stdout:
+            line = raw.decode(errors="replace").rstrip()
+            lines.append(line)
+            for needle, message in _STAGE_PATTERNS:
+                if needle in line:
+                    state["stage"] = message
+
+    async def _ticker() -> None:
+        # Edits the status message periodically instead of on every log
+        # line — avoids Telegram's edit-rate limits and message spam.
+        while True:
+            await asyncio.sleep(STATUS_TICK_S)
+            if state["stage"] and state["stage"] != state["shown"]:
+                state["shown"] = state["stage"]
+                try:
+                    await status_msg.edit_text(state["stage"])
+                except Exception:  # noqa: BLE001 — e.g. "message not modified"
+                    pass
+
+    ticker_task = asyncio.create_task(_ticker())
+    try:
+        await asyncio.wait_for(_read_stream(), timeout=PIPELINE_TIMEOUT_S)
+        returncode = await proc.wait()
+    except asyncio.TimeoutError:
+        proc.kill()
+        return "⏱️ Kelamaan (>15 menit), aku hentiin. Cek manual lewat terminal."
+    finally:
+        ticker_task.cancel()
+
+    return _format_result(returncode, "\n".join(lines), "")
 
 
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -120,20 +179,28 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await tg_file.download_to_drive(str(local_path))
 
     await status_msg.edit_text(
-        f"⚙️ Diproses: {filename}\nBiasanya 3-5 menit (Gemini + upload + posting). Sabar ya..."
+        f"⚙️ Diproses: {filename}\nBiasanya 3-5 menit (Gemini + upload + posting). "
+        "Status bakal keupdate tiap beberapa detik..."
     )
 
     try:
-        result = await asyncio.get_running_loop().run_in_executor(
-            None, _run_pipeline, local_path
-        )
-    except subprocess.TimeoutExpired:
-        result = "⏱️ Kelamaan (>15 menit), aku hentiin. Cek manual lewat terminal."
+        result = await _run_pipeline(local_path, status_msg)
     except Exception as exc:  # noqa: BLE001 — report, don't crash the bot
         log.exception("[bot] pipeline crashed")
         result = f"💥 Error gak terduga: {type(exc).__name__}: {exc}"
 
-    await status_msg.edit_text(result, disable_web_page_preview=True)
+    # The result must reach the user even if editing the status message
+    # fails (e.g. a transient network blip on a long-polling connection) —
+    # otherwise the pipeline can finish successfully and the user never
+    # finds out. Fall back to a brand-new message if the edit fails.
+    try:
+        await status_msg.edit_text(result, disable_web_page_preview=True)
+    except Exception:  # noqa: BLE001
+        log.exception("[bot] failed to edit status message, sending fresh one")
+        try:
+            await update.message.reply_text(result, disable_web_page_preview=True)
+        except Exception:  # noqa: BLE001
+            log.exception("[bot] failed to send result even as a new message")
 
 
 async def handle_other(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -142,6 +209,10 @@ async def handle_other(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(
         "Kirim video mentahan-nya ke sini, nanti aku proses & posting otomatis."
     )
+
+
+async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    log.error("[bot] unhandled exception", exc_info=context.error)
 
 
 def main() -> None:
@@ -154,11 +225,30 @@ def main() -> None:
             "TELEGRAM_BOT_TOKEN is empty. See telegram_bot.py's docstring → 'Setup'."
         )
 
-    app = Application.builder().token(config.telegram_bot_token).build()
+    builder = Application.builder().token(config.telegram_bot_token)
+    if config.telegram_api_id and config.telegram_api_hash:
+        # Route through a Local Bot API Server (see README → "Telegram
+        # bot") so file downloads aren't capped at api.telegram.org's
+        # 20MB limit — raw phone footage routinely exceeds that.
+        base = config.telegram_local_api_url.rstrip("/")
+        log.info("[bot] using Local Bot API Server at %s", base)
+        builder = (
+            builder.base_url(f"{base}/bot")
+            .base_file_url(f"{base}/file/bot")
+            .local_mode(True)
+        )
+    else:
+        log.warning(
+            "[bot] TELEGRAM_API_ID/HASH not set — using api.telegram.org "
+            "directly, which caps downloads at 20MB. See README → "
+            "'Telegram bot' to remove that limit."
+        )
+    app = builder.build()
     app.add_handler(
         MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video)
     )
     app.add_handler(MessageHandler(filters.ALL, handle_other))
+    app.add_error_handler(handle_error)
 
     log.info("[bot] MentahanPOV bot starting (polling)...")
     app.run_polling()
