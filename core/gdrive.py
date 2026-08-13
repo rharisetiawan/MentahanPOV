@@ -1,4 +1,10 @@
-"""Google Drive uploader (Service Account auth).
+"""Google Drive uploader (OAuth2 installed-app flow).
+
+Service accounts have zero personal storage quota on regular "My Drive"
+folders (Google only lets them write into paid Shared Drives), so this
+authenticates as the actual Drive owner instead — same pattern as
+distributors/youtube.py, reusing the same OAuth client. First run opens a
+browser for consent; the token is cached afterwards.
 
 Uploads a single video file to a target folder, sets the file permission to
 "anyone with the link can view", and returns the shareable URL.
@@ -11,7 +17,9 @@ import mimetypes
 from pathlib import Path
 from typing import Any
 
-from google.oauth2.service_account import Credentials
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -20,40 +28,99 @@ from config import config
 
 log = logging.getLogger(__name__)
 
-SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+
+def _get_creds() -> Credentials:
+    creds: Credentials | None = None
+    token_path = config.gdrive_token_file
+    secrets_path = config.youtube_client_secrets  # same OAuth client, different scope
+
+    if token_path.exists():
+        creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+
+    if creds and creds.valid:
+        return creds
+
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+    else:
+        if not secrets_path.exists():
+            raise FileNotFoundError(
+                f"OAuth client secrets not found at {secrets_path}. "
+                "See README → 'Google Drive setup'."
+            )
+        flow = InstalledAppFlow.from_client_secrets_file(str(secrets_path), SCOPES)
+        # prompt=select_account forces Google to show the account chooser
+        # instead of silently reusing whichever session already has this
+        # scope+client consented (which may not be the account that owns
+        # the Drive folder).
+        creds = flow.run_local_server(
+            port=0, prompt="select_account", open_browser=False
+        )
+
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    token_path.write_text(creds.to_json(), encoding="utf-8")
+    return creds
 
 
 def _service() -> Any:
-    if not config.gdrive_sa_json.exists():
-        raise FileNotFoundError(
-            f"GDrive service-account JSON not found at {config.gdrive_sa_json}. "
-            "See README → 'Google Drive setup'."
-        )
-    creds = Credentials.from_service_account_file(
-        str(config.gdrive_sa_json), scopes=SCOPES
-    )
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
+    return build("drive", "v3", credentials=_get_creds(), cache_discovery=False)
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
-def upload_video(video_path: Path) -> dict[str, str]:
-    """Upload `video_path` to Drive, share publicly, return file id + URL."""
-    if not video_path.exists():
-        raise FileNotFoundError(video_path)
+def resolve_category_folder_id(category_name: str) -> str:
+    """Find the id of the subfolder named `category_name` under GDRIVE_FOLDER_ID."""
     if not config.gdrive_folder_id:
         raise RuntimeError(
-            "GDRIVE_FOLDER_ID is empty. Share a folder with the service account and set its ID."
+            "GDRIVE_FOLDER_ID is empty. Set it to the MentahanPOV project folder ID."
         )
+    svc = _service()
+    safe_name = category_name.replace("'", "\\'")
+    query = (
+        f"'{config.gdrive_folder_id}' in parents "
+        f"and name = '{safe_name}' "
+        "and mimeType = 'application/vnd.google-apps.folder' "
+        "and trashed = false"
+    )
+    resp = svc.files().list(q=query, fields="files(id, name)").execute()
+    files = resp.get("files", [])
+    if not files:
+        raise RuntimeError(
+            f"Folder '{category_name}' not found under GDRIVE_FOLDER_ID. "
+            "Check the folder exists and belongs to the authenticated account."
+        )
+    return files[0]["id"]
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
+def upload_video(
+    video_path: Path,
+    *,
+    dest_folder_id: str | None = None,
+    dest_filename: str | None = None,
+) -> dict[str, str]:
+    """Upload `video_path` to Drive, share publicly, return file id + URL.
+
+    Defaults to GDRIVE_FOLDER_ID and the original filename when the
+    category folder / SOP filename haven't been resolved yet (e.g. dry runs).
+    """
+    if not video_path.exists():
+        raise FileNotFoundError(video_path)
+    folder_id = dest_folder_id or config.gdrive_folder_id
+    if not folder_id:
+        raise RuntimeError("GDRIVE_FOLDER_ID is empty.")
+    filename = dest_filename or video_path.name
 
     svc = _service()
     mime, _ = mimetypes.guess_type(str(video_path))
     mime = mime or "video/mp4"
 
-    log.info("[gdrive] uploading %s (%s)", video_path.name, mime)
+    log.info("[gdrive] uploading %s as %s (%s)", video_path.name, filename, mime)
     media = MediaFileUpload(
         str(video_path), mimetype=mime, resumable=True, chunksize=8 * 1024 * 1024
     )
-    metadata = {"name": video_path.name, "parents": [config.gdrive_folder_id]}
+    metadata = {"name": filename, "parents": [folder_id]}
 
     request = svc.files().create(
         body=metadata, media_body=media, fields="id, name, webViewLink"

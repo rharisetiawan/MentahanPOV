@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 from config import config
-from core import gdrive, gemini, state
+from core import gdrive, geocode, gemini, state, video_facts, watermark
 from distributors import facebook, instagram, tiktok, youtube
 
 log = logging.getLogger("mentahanpov")
@@ -60,6 +60,11 @@ def parse_args() -> argparse.Namespace:
         "--skip-gemini", action="store_true", help="Reuse caption from state file."
     )
     p.add_argument(
+        "--skip-watermark",
+        action="store_true",
+        help="Reuse cached posting copy from state file.",
+    )
+    p.add_argument(
         "--force",
         action="store_true",
         help="Re-post even if a platform previously succeeded.",
@@ -68,12 +73,64 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def step_gdrive(video: Path, *, skip: bool) -> str:
+def step_geocode(facts: video_facts.VideoFacts) -> tuple[str, str]:
+    if not facts.gps:
+        log.warning("[geocode] no GPS in video metadata; caption will lack location")
+        return "Lokasi tidak tersedia", "-"
+    lat, lon = facts.gps
+    coordinates = f"{lat:.6f}, {lon:.6f}"
+    address = geocode.reverse_geocode(lat, lon) or coordinates
+    return address, coordinates
+
+
+def step_gemini(
+    video: Path,
+    facts: video_facts.VideoFacts,
+    address: str,
+    coordinates: str,
+    *,
+    skip: bool,
+) -> gemini.GeminiOutput:
+    entry = state.get(config.state_file, video)
+    cached = entry.get("gemini", {})
+    if skip and entry.get("caption") and cached.get("file_name"):
+        log.info("[gemini] reusing cached caption/filename/folder from state")
+        return gemini.GeminiOutput(
+            caption=entry["caption"],
+            file_name=cached["file_name"],
+            folder=cached["folder"],
+            raw="",
+        )
+    out = gemini.generate_metadata(
+        video,
+        date=facts.date,
+        address=address,
+        coordinates=coordinates,
+        duration_s=facts.duration_s,
+        resolution=facts.resolution,
+    )
+    state.update(
+        config.state_file,
+        video,
+        {
+            "caption": out.caption,
+            "gemini": {"file_name": out.file_name, "folder": out.folder},
+        },
+    )
+    return out
+
+
+def step_gdrive(
+    video: Path, gemini_out: gemini.GeminiOutput, *, skip: bool
+) -> str:
     entry = state.get(config.state_file, video)
     if skip and entry.get("gdrive_url"):
         log.info("[gdrive] reusing cached URL: %s", entry["gdrive_url"])
         return entry["gdrive_url"]
-    info = gdrive.upload_video(video)
+    folder_id = gdrive.resolve_category_folder_id(gemini_out.folder)
+    info = gdrive.upload_video(
+        video, dest_folder_id=folder_id, dest_filename=gemini_out.file_name
+    )
     state.update(
         config.state_file,
         video,
@@ -82,26 +139,25 @@ def step_gdrive(video: Path, *, skip: bool) -> str:
     return info["view_url"]
 
 
-def step_gemini(
-    video: Path, gdrive_url: str, *, skip: bool
-) -> tuple[str, dict[str, str]]:
+def step_watermark(video: Path, *, skip: bool) -> Path:
     entry = state.get(config.state_file, video)
-    if skip and entry.get("caption"):
-        log.info("[gemini] reusing cached caption from state")
-        return entry["caption"], entry.get("gemini", {})
-    out = gemini.generate_metadata(video, gdrive_url)
-    caption = out.to_caption()
-    payload = {
-        "visual_analysis": out.visual_analysis,
-        "draft_caption": out.draft_caption,
-        "cloud_storage": out.cloud_storage,
-    }
-    state.update(config.state_file, video, {"caption": caption, "gemini": payload})
-    return caption, payload
+    cached = entry.get("posting_copy_path")
+    if skip and cached and Path(cached).exists():
+        log.info("[watermark] reusing cached posting copy: %s", cached)
+        return Path(cached)
+    out_path = config.posting_copy_dir / f"{state.video_key(video)}_post.mp4"
+    watermark.make_posting_copy(video, output_path=out_path)
+    state.update(config.state_file, video, {"posting_copy_path": str(out_path)})
+    return out_path
 
 
 def step_distribute(
-    video: Path, caption: str, gdrive_url: str, platforms: list[str], force: bool
+    video: Path,
+    post_video: Path,
+    caption: str,
+    gdrive_url: str,
+    platforms: list[str],
+    force: bool,
 ) -> None:
     for name in platforms:
         if name not in PLATFORM_REGISTRY:
@@ -114,7 +170,7 @@ def step_distribute(
             continue
         try:
             log.info("[%s] posting…", name)
-            result = PLATFORM_REGISTRY[name](video, caption, gdrive_url=gdrive_url)
+            result = PLATFORM_REGISTRY[name](post_video, caption, gdrive_url=gdrive_url)
             state.mark_platform(
                 config.state_file,
                 video,
@@ -148,17 +204,25 @@ def main() -> int:
     platforms = [p.strip() for p in args.platforms.split(",") if p.strip()]
     log.info("Pipeline start: video=%s platforms=%s", video.name, platforms)
 
-    gdrive_url = step_gdrive(video, skip=args.skip_gdrive)
+    facts = video_facts.extract_facts(video)
+    address, coordinates = step_geocode(facts)
+    log.info("Location: %s (%s)", address, coordinates)
+
+    gemini_out = step_gemini(video, facts, address, coordinates, skip=args.skip_gemini)
+    log.info("Folder: %s | file_name: %s", gemini_out.folder, gemini_out.file_name)
+    log.info("Caption (%d chars):\n%s", len(gemini_out.caption), gemini_out.caption)
+
+    gdrive_url = step_gdrive(video, gemini_out, skip=args.skip_gdrive)
     log.info("GDrive URL: %s", gdrive_url)
 
-    caption, _ = step_gemini(video, gdrive_url, skip=args.skip_gemini)
-    log.info("Caption (%d chars):\n%s", len(caption), caption)
-
     if args.dry_run:
-        log.info("--dry-run set; skipping distribution.")
+        log.info("--dry-run set; skipping watermark render + distribution.")
         return 0
 
-    step_distribute(video, caption, gdrive_url, platforms, args.force)
+    post_video = step_watermark(video, skip=args.skip_watermark)
+    log.info("Posting copy ready: %s", post_video)
+
+    step_distribute(video, post_video, gemini_out.caption, gdrive_url, platforms, args.force)
 
     final = state.get(config.state_file, video)
     log.info("Final state: %s", final.get("platforms"))

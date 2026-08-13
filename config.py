@@ -24,18 +24,55 @@ def _env(key: str, default: str | None = None, *, required: bool = False) -> str
 
 @dataclass(frozen=True)
 class Config:
-    # GDrive
-    gdrive_sa_json: Path = field(
+    # GDrive (OAuth2 installed-app — reuses the YouTube client secrets below,
+    # since service accounts can't write to regular "My Drive" folders)
+    gdrive_token_file: Path = field(
         default_factory=lambda: Path(
-            _env("GDRIVE_SERVICE_ACCOUNT_JSON", "./credentials/gdrive-sa.json")
+            _env("GDRIVE_TOKEN_FILE", "./credentials/gdrive-token.json")
         )
     )
+    # ID of the MentahanPOV project ROOT folder (the one containing
+    # "01 - Suasana Jalan & Perjalanan", "02 - Cuaca & Hujan", etc).
     gdrive_folder_id: str = field(default_factory=lambda: _env("GDRIVE_FOLDER_ID"))
+    # Pipe-separated (folder names may contain commas). Must match the
+    # actual subfolder names under GDRIVE_FOLDER_ID exactly.
+    drive_categories: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            c.strip()
+            for c in _env(
+                "DRIVE_CATEGORIES",
+                "01 - Suasana Jalan & Perjalanan|"
+                "02 - Cuaca & Hujan|"
+                "03 - Alam, Hewan & ASMR|"
+                "04 - Raw Photos & Textures|"
+                "05 - Timelapse Assets",
+            ).split("|")
+            if c.strip()
+        )
+    )
 
     # Gemini
     gemini_api_key: str = field(default_factory=lambda: _env("GEMINI_API_KEY"))
     gemini_model: str = field(
         default_factory=lambda: _env("GEMINI_MODEL", "gemini-2.5-flash")
+    )
+
+    # Watermark / posting-copy rendering
+    watermark_logo_path: Path = field(
+        default_factory=lambda: Path(
+            _env("WATERMARK_LOGO_PATH", "./assets/watermark-logo.png")
+        )
+    )
+    watermark_opacity: float = field(
+        default_factory=lambda: float(_env("WATERMARK_OPACITY", "0.35"))
+    )
+    watermark_width_px: int = field(
+        default_factory=lambda: int(_env("WATERMARK_WIDTH_PX", "260"))
+    )
+    posting_copy_dir: Path = field(
+        default_factory=lambda: Path(
+            _env("POSTING_COPY_DIR", "./state/posting_copies")
+        )
     )
 
     # YouTube

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import platform
 import sys
 import time
 from pathlib import Path
@@ -102,7 +103,8 @@ def post(video_path: Path, caption: str, **_: Any) -> dict[str, str]:
 
         caption_box.click()
         # TikTok prepopulates filename → clear it.
-        page.keyboard.press("Control+A")
+        _mod = "Meta" if platform.system() == "Darwin" else "Control"
+        page.keyboard.press(f"{_mod}+A")
         page.keyboard.press("Delete")
         page.keyboard.type(caption, delay=15)
         log.info("[tiktok] caption entered")
