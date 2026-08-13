@@ -113,6 +113,25 @@ class Config:
         default_factory=lambda: _env("TIKTOK_HEADLESS", "false").lower() == "true"
     )
 
+    # Telegram bot front-end (see telegram_bot.py)
+    telegram_bot_token: str = field(
+        default_factory=lambda: _env("TELEGRAM_BOT_TOKEN")
+    )
+    # Comma-separated numeric Telegram user ids. Empty = anyone with the
+    # bot's link can trigger it — set this unless you want that.
+    telegram_allowed_user_ids: tuple[int, ...] = field(
+        default_factory=lambda: tuple(
+            int(u) for u in _env("TELEGRAM_ALLOWED_USER_IDS", "").split(",") if u.strip()
+        )
+    )
+    # Optional override of --platforms for bot-triggered runs. Empty = use
+    # main.py's own PLATFORMS default.
+    telegram_platforms: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            p.strip() for p in _env("TELEGRAM_PLATFORMS", "").split(",") if p.strip()
+        )
+    )
+
     # Orchestration
     platforms: tuple[str, ...] = field(
         default_factory=lambda: tuple(

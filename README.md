@@ -20,10 +20,11 @@ video file ─► ffprobe facts ─► reverse geocode ─► Gemini SOP V3 (JSO
 ```
 mentahanpov/
 ├── main.py                  # CLI entry point
+├── telegram_bot.py          # optional Telegram front-end, runs main.py per video
 ├── config.py                # env loader + typed config
 ├── core/
 │   ├── video_facts.py       # ffprobe: date, duration, resolution, GPS
-│   ├── geocode.py           # GPS -> street address (Google Geocoding API)
+│   ├── geocode.py           # GPS -> street address (OpenStreetMap Nominatim, free)
 │   ├── gdrive.py            # Drive upload + folder resolution + share + URL
 │   ├── gemini.py            # SOP V3 caption/filename/folder generator (JSON)
 │   ├── watermark.py         # master -> watermarked, feed-sized posting copy
@@ -222,6 +223,51 @@ WATERMARK_OPACITY=0.35
 WATERMARK_WIDTH_PX=260
 POSTING_COPY_DIR=./state/posting_copies
 ```
+
+### 8. Telegram bot (optional — trigger from your phone)
+
+Skip this if you're happy running `python main.py` from a terminal. This
+is only for not having to touch a terminal at all: send a video to your
+bot from Telegram, get the result links back in chat.
+
+1. Message **@BotFather** on Telegram → `/newbot` → follow the prompts → copy the token it gives you.
+2. Message **@userinfobot** to find your own numeric Telegram user id (so randoms who find your bot's link can't trigger it).
+
+```env
+TELEGRAM_BOT_TOKEN=<paste token from BotFather>
+TELEGRAM_ALLOWED_USER_IDS=<your numeric id>
+```
+
+```bash
+python telegram_bot.py
+```
+
+Leave that running (see "Keeping the bot running" below), then open your
+bot in Telegram and send it a video file. It downloads to `./incoming/`,
+runs the same pipeline as the CLI (`main.py`) as a subprocess, and replies
+with the per-platform links or errors once done — no Vercel/hosting
+needed, this just needs to stay running somewhere with your credentials.
+
+> Long-running (ffmpeg watermarking, multi-platform uploads, browser-based
+> Playwright for TikTok) doesn't fit serverless platforms like Vercel —
+> execution-time limits are usually 10-60s, this pipeline routinely takes
+> 3-5 minutes per video. Run the bot on your own machine or any small
+> always-on box (even a Raspberry Pi) instead.
+
+#### Keeping the bot running
+
+Simplest: a dedicated terminal tab, or `screen`/`tmux` so it survives you
+closing the terminal:
+
+```bash
+screen -S mentahanpov-bot
+source .venv/bin/activate && python telegram_bot.py
+# Ctrl-A then D to detach; `screen -r mentahanpov-bot` to reattach
+```
+
+On macOS, `launchd` (or `pm2` via Node) will also auto-restart it on
+crash/reboot — out of scope here, but worth setting up once this is part
+of your daily routine.
 
 ---
 

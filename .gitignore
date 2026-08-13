@@ -16,6 +16,7 @@ credentials/
 state/
 *.log
 downloads/
+incoming/
 
 # Editor / OS
 .idea/
