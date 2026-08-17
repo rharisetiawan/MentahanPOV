@@ -32,6 +32,7 @@ from telegram import Update
 from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
 from config import config
+from core import video_facts
 
 log = logging.getLogger("mentahanpov.bot")
 
@@ -61,6 +62,10 @@ _STAGE_PATTERNS: list[tuple[str, str]] = [
     ("[instagram] posting", "📤 Posting ke Instagram..."),
     ("[instagram] OK", "✅ Instagram beres..."),
     ("[tiktok] posting", "📤 Posting ke TikTok..."),
+    ("[facebook_story] posting", "📱 Posting Story Facebook..."),
+    ("[facebook_story] OK", "✅ Story Facebook beres..."),
+    ("[instagram_story] posting", "📱 Posting Story Instagram..."),
+    ("[instagram_story] OK", "✅ Story Instagram beres..."),
 ]
 
 
@@ -160,11 +165,12 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
-    tg_video = update.message.video or (
+    sent_as_document = bool(
         update.message.document
-        if update.message.document
         and (update.message.document.mime_type or "").startswith("video/")
-        else None
+    )
+    tg_video = update.message.video or (
+        update.message.document if sent_as_document else None
     )
     if tg_video is None:
         await update.message.reply_text("Kirim file video ya (bukan foto/link).")
@@ -177,6 +183,8 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     filename = getattr(tg_video, "file_name", None) or f"{tg_video.file_unique_id}.mp4"
     local_path = INCOMING_DIR / filename
     await tg_file.download_to_drive(str(local_path))
+
+    await _warn_if_metadata_stripped(local_path, sent_as_document, update.message)
 
     await status_msg.edit_text(
         f"⚙️ Diproses: {filename}\nBiasanya 3-5 menit (Gemini + upload + posting). "
@@ -201,6 +209,48 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.message.reply_text(result, disable_web_page_preview=True)
         except Exception:  # noqa: BLE001
             log.exception("[bot] failed to send result even as a new message")
+
+
+async def _warn_if_metadata_stripped(
+    local_path: Path, sent_as_document: bool, message
+) -> None:
+    """Tell the user when a send method cost them GPS + quality.
+
+    Telegram re-encodes anything sent from the Gallery ("Video"), which
+    drops the ISO-6709 `location` tag the caption's 📍 line depends on and
+    downscales the footage — fatal for an archive whose whole promise is
+    untouched HD. Sending the same file as a Document keeps it byte-exact.
+    """
+    try:
+        facts = video_facts.extract_facts(local_path)
+    except Exception:  # noqa: BLE001 — never block a run over a warning
+        log.exception("[bot] could not probe video for metadata warning")
+        return
+    if facts.gps:
+        return
+
+    hint = (
+        "⚠️ Video ini gak ada data GPS-nya, jadi baris '📍 Location' "
+        "bakal dilewati di caption.\n\n"
+    )
+    if not sent_as_document:
+        hint += (
+            "Penyebabnya: video dikirim lewat *Galeri*, dan Telegram "
+            "meng-compress ulang (GPS hilang + kualitas turun).\n\n"
+            "Biar GPS & kualitas HD-nya utuh: kirim ulang pakai "
+            "📎 → *File*, bukan Galeri.\n\n"
+            "Proses tetap saya lanjutkan untuk yang ini."
+        )
+    else:
+        hint += (
+            "File dikirim sebagai File (bagus — gak di-compress), tapi "
+            "memang gak ada GPS-nya sejak awal. Pastikan lokasi aktif "
+            "di kamera saat merekam."
+        )
+    try:
+        await message.reply_text(hint, parse_mode="Markdown")
+    except Exception:  # noqa: BLE001
+        log.exception("[bot] failed to send metadata warning")
 
 
 async def handle_other(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

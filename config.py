@@ -66,8 +66,10 @@ class Config:
     watermark_opacity: float = field(
         default_factory=lambda: float(_env("WATERMARK_OPACITY", "0.35"))
     )
-    watermark_width_px: int = field(
-        default_factory=lambda: int(_env("WATERMARK_WIDTH_PX", "260"))
+    # Fraction of the posting copy's width, not a pixel count: a fixed px
+    # size would read as huge on a 720p clip and invisible on 4K.
+    watermark_width_pct: float = field(
+        default_factory=lambda: float(_env("WATERMARK_WIDTH_PCT", "0.26"))
     )
     posting_copy_dir: Path = field(
         default_factory=lambda: Path(
@@ -99,6 +101,9 @@ class Config:
         default_factory=lambda: _env("FB_PAGE_ACCESS_TOKEN")
     )
     ig_user_id: str = field(default_factory=lambda: _env("IG_USER_ID"))
+    # Only used to build a human-clickable story link in the run summary —
+    # the Graph API doesn't return permalinks for stories.
+    ig_username: str = field(default_factory=lambda: _env("IG_USERNAME"))
     graph_api_version: str = field(
         default_factory=lambda: _env("GRAPH_API_VERSION", "v19.0")
     )
@@ -146,7 +151,12 @@ class Config:
     platforms: tuple[str, ...] = field(
         default_factory=lambda: tuple(
             p.strip()
-            for p in _env("PLATFORMS", "youtube,facebook,instagram,tiktok").split(",")
+            for p in _env(
+                "PLATFORMS",
+                # TikTok is opt-in: it needs a one-off Playwright login, and
+                # listing it before that makes every run report a failure.
+                "youtube,facebook,instagram,facebook_story,instagram_story",
+            ).split(",")
             if p.strip()
         )
     )

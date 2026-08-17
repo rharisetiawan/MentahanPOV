@@ -8,8 +8,11 @@ Flow:
 
 Requirements:
 - Instagram Business or Creator account linked to a Facebook Page.
-- The video_url MUST be publicly reachable (HTTPS). The GDrive direct-download
-  URL works for short files; for larger files prefer a CDN (S3, Cloudinary).
+- `post_url` MUST be publicly reachable over HTTPS and MUST point at the
+  watermarked posting copy. Instagram downloads the bytes from that URL
+  itself, so it — not the `video_path` argument — decides what actually
+  gets published. See core/gdrive.py:direct_download_url for why the
+  usercontent/confirm=t form is used rather than a plain Drive link.
 """
 
 from __future__ import annotations
@@ -30,17 +33,6 @@ PLATFORM = "instagram"
 
 def _graph(path: str) -> str:
     return f"https://graph.facebook.com/{config.graph_api_version}/{path}"
-
-
-def _drive_direct(view_url: str) -> str:
-    """Best-effort conversion of a GDrive view URL to a direct-download URL."""
-    if "drive.google.com/file/d/" in view_url:
-        try:
-            file_id = view_url.split("/d/")[1].split("/")[0]
-            return f"https://drive.google.com/uc?export=download&id={file_id}"
-        except IndexError:
-            pass
-    return view_url
 
 
 def _wait_finished(creation_id: str, timeout: int = 600) -> None:
@@ -67,20 +59,25 @@ def _wait_finished(creation_id: str, timeout: int = 600) -> None:
 
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=2, min=4, max=30))
 def post(
-    video_path: Path, caption: str, *, gdrive_url: str | None = None, **_: Any
+    video_path: Path, caption: str, *, post_url: str | None = None, **_: Any
 ) -> dict[str, str]:
     if not config.ig_user_id or not config.fb_page_access_token:
         raise RuntimeError("IG_USER_ID / FB_PAGE_ACCESS_TOKEN missing.")
-    if not gdrive_url:
-        raise RuntimeError("Instagram requires a public video URL (gdrive_url).")
+    # `post_url` must point at the WATERMARKED posting copy, not the master.
+    # Instagram fetches the bytes from this URL itself, so whatever it points
+    # at is what actually gets published — passing the master's Drive link
+    # here silently publishes un-watermarked footage.
+    if not post_url:
+        raise RuntimeError(
+            "Instagram requires a public URL for the watermarked posting copy."
+        )
 
-    video_url = _drive_direct(gdrive_url)
     log.info("[instagram] creating container for %s", video_path.name)
     create = requests.post(
         _graph(f"{config.ig_user_id}/media"),
         data={
             "media_type": "REELS",
-            "video_url": video_url,
+            "video_url": post_url,
             "caption": caption,
             "access_token": config.fb_page_access_token,
         },

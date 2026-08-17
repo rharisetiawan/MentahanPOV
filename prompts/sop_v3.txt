@@ -5,37 +5,51 @@ Threads. Analyse the attached video and produce its caption package.
 GROUND-TRUTH FACTS — use these exactly, do not invent, alter, guess, or
 round them. They were extracted from the file itself, not from you:
 - Date recorded (YYYYMMDD): {{DATE}}
-- Address: {{ADDRESS}}
-- Coordinates: {{COORDINATES}}
+{{ADDRESS_FACT}}
+- Location line to reproduce verbatim (may be empty): {{LOCATION_LINE}}
 - Duration: {{DURATION_S}} seconds
 - Resolution label: {{RESOLUTION}}
 - Available Drive folders (pick exactly ONE, copy the name verbatim):
 {{FOLDERS_LIST}}
 
 TASK
-1. Watch the video and identify its core visual/audio "vibe" (e.g. rainy
-   street, mosque before prayer, arcade at night, campus walk).
-2. Write a catchy title, a short vibe tag in parentheses, and 1-2 relevant
-   emoji.
-3. Write 1-2 simple-English sentences describing the vibe and what
-   creators could use the clip for (background for quotes, reels, vlogs,
-   ASMR, transitions, etc). Keep it inviting, not salesy.
+1. Watch AND listen to the video. Identify its core visual/audio "vibe"
+   and the single most interesting detail in it — an unexpected sound, a
+   small human moment, a texture, a light quality. That detail is your hook.
+2. Write an opening hook line that makes someone stop scrolling. Rules:
+   - Lead with the intriguing detail, a question, or a sensory tease.
+   - It must be TRUE to what is actually in the video. Never promise
+     drama, danger, or emotion the footage does not contain.
+   - Do NOT open with limp generic phrases like "This clip captures…",
+     "Experience the…", "Watch as…", or "A video of…".
+   - End it with 1-2 fitting emoji.
+   Good shape: "Guess what that sound is at 0:08 🔊🐦",
+   "Nobody notices the man in the corner 🚦", "Rain, tin roof, nothing else 🌧️".
+3. Write 1-2 simple-English sentences: first what you see/hear (mention the
+   ambient audio — it is the thing that makes this archive useful), then
+   what creators could use the clip for (background for quotes, reels,
+   vlogs, ASMR, transitions). Inviting, not salesy.
 4. Pick the single best-fit folder from the list above.
-5. Build a LOCATION token and a VIBE token in ALL CAPS, words separated by
-   underscores, from the address' city/area and the video's subject
-   (e.g. MALANG, KAYUTANGAN_NIGHT_TRAFFIC).
-6. Assemble file_name EXACTLY as:
-   {{DATE}}_<LOCATION>_<VIBE>_{{DURATION_S}}s_{{RESOLUTION}}.mp4
+5. Build a VIBE token in ALL CAPS, words separated by underscores, from the
+   video's subject (e.g. KAYUTANGAN_NIGHT_TRAFFIC). Keep it to 2-4 words.
+6. Assemble file_name EXACTLY as the pattern below, replacing ONLY the
+   <ANGLE_BRACKET> placeholders and leaving everything else byte-identical:
+   {{FILENAME_PATTERN}}
+   Where <LOCATION> appears, use the CITY or district from the Address —
+   the everyday name a local would say (e.g. MALANG, SUKUN), ALL CAPS with
+   underscores. Never the province, postcode, or country.
 7. Pick 4 relevant lowercase hashtags (no spaces) that fit the vibe.
 
 Assemble the caption text EXACTLY in this shape (keep the emoji, line
-breaks, and labels literally, substituting the placeholders):
+breaks, and labels literally, substituting the placeholders). If the
+location line above is empty, omit that line AND its blank line entirely —
+never write a placeholder like "not available":
 
-<Title> (<Vibe tag>) <emoji>
+<Hook line> <emoji>
 
 <1-2 sentence description>
 
-📍 Location: {{ADDRESS}} ({{COORDINATES}})
+{{LOCATION_LINE}}
 
 📥 Free raw file (no watermark, {{RESOLUTION}}). Click the link in my bio, then open folder '<chosen folder name>'.
 🔍 Search file: <file_name>
