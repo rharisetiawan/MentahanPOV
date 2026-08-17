@@ -27,6 +27,7 @@ import html
 import logging
 import re
 import sys
+import time
 from pathlib import Path
 
 from telegram import Update
@@ -42,7 +43,7 @@ log = logging.getLogger("mentahanpov.bot")
 REPO_ROOT = Path(__file__).parent
 INCOMING_DIR = REPO_ROOT / "incoming"
 PIPELINE_TIMEOUT_S = 15 * 60  # generous — Gemini + 3 uploads can take a while
-STATUS_TICK_S = 3  # how often the status message is allowed to be edited
+STATUS_TICK_S = 5  # seconds between status redraws (Telegram edit-rate safe)
 
 _FINAL_STATE_RE = re.compile(r"Final state: (\{.*\})\s*$")
 
@@ -108,7 +109,68 @@ def _format_result(returncode: int, stdout: str, stderr: str) -> str:
     return f"Proses {status}, tapi gak nemu ringkasan hasil. Log terakhir:\n```\n{tail}\n```"
 
 
-async def _run_pipeline(video_path: Path, status_msg) -> str:
+class LiveStatus:
+    """A single chat message that keeps ticking while work happens.
+
+    Editing only when the stage *changes* leaves the message frozen for
+    minutes at a time — during the Telegram download, or while Gemini
+    thinks — which is indistinguishable from a crash from the user's side.
+    So the elapsed clock and a spinner are redrawn on every tick, giving
+    the text something that always moves.
+    """
+
+    _FRAMES = "◐◓◑◒"
+
+    def __init__(self, message, stage: str) -> None:
+        self._message = message
+        self._stage = stage
+        self._note = ""
+        self._start = time.monotonic()
+        self._tick = 0
+        self._task: asyncio.Task | None = None
+
+    def set(self, stage: str, note: str = "") -> None:
+        self._stage = stage
+        self._note = note
+
+    def _render(self) -> str:
+        elapsed = int(time.monotonic() - self._start)
+        mins, secs = divmod(elapsed, 60)
+        clock = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
+        spinner = self._FRAMES[self._tick % len(self._FRAMES)]
+        text = f"{spinner} {clock} · {self._stage}"
+        return f"{text}\n{self._note}" if self._note else text
+
+    async def _loop(self) -> None:
+        while True:
+            await asyncio.sleep(STATUS_TICK_S)
+            self._tick += 1
+            try:
+                await self._message.edit_text(self._render())
+            except Exception:  # noqa: BLE001 — a dropped frame is harmless
+                pass
+
+    async def __aenter__(self) -> "LiveStatus":
+        self._task = asyncio.create_task(self._loop())
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        if self._task:
+            self._task.cancel()
+
+    async def finish(self, text: str) -> None:
+        """Stop ticking and leave `text` as the message's final content."""
+        if self._task:
+            self._task.cancel()
+            self._task = None
+        try:
+            await self._message.edit_text(text, disable_web_page_preview=True)
+        except Exception:  # noqa: BLE001
+            log.exception("[bot] failed to edit final status, sending fresh one")
+            await self._message.reply_text(text, disable_web_page_preview=True)
+
+
+async def _run_pipeline(video_path: Path, status: LiveStatus) -> str:
     args = [sys.executable, "-u", "main.py", str(video_path)]
     if config.telegram_platforms:
         args += ["--platforms", ",".join(config.telegram_platforms)]
@@ -122,7 +184,6 @@ async def _run_pipeline(video_path: Path, status_msg) -> str:
     )
 
     lines: list[str] = []
-    state = {"stage": None, "shown": None}
 
     async def _read_stream() -> None:
         assert proc.stdout is not None
@@ -131,29 +192,14 @@ async def _run_pipeline(video_path: Path, status_msg) -> str:
             lines.append(line)
             for needle, message in _STAGE_PATTERNS:
                 if needle in line:
-                    state["stage"] = message
+                    status.set(message)
 
-    async def _ticker() -> None:
-        # Edits the status message periodically instead of on every log
-        # line — avoids Telegram's edit-rate limits and message spam.
-        while True:
-            await asyncio.sleep(STATUS_TICK_S)
-            if state["stage"] and state["stage"] != state["shown"]:
-                state["shown"] = state["stage"]
-                try:
-                    await status_msg.edit_text(state["stage"])
-                except Exception:  # noqa: BLE001 — e.g. "message not modified"
-                    pass
-
-    ticker_task = asyncio.create_task(_ticker())
     try:
         await asyncio.wait_for(_read_stream(), timeout=PIPELINE_TIMEOUT_S)
         returncode = await proc.wait()
     except asyncio.TimeoutError:
         proc.kill()
         return "⏱️ Kelamaan (>15 menit), aku hentiin. Cek manual lewat terminal."
-    finally:
-        ticker_task.cancel()
 
     return _format_result(returncode, "\n".join(lines), "")
 
@@ -180,48 +226,46 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     size_mb = (getattr(tg_video, "file_size", 0) or 0) / 1048576
-    status_msg = await update.message.reply_text(
-        f"📥 Nerima video ({size_mb:.0f} MB), download dulu...\n"
-        "File besar bisa makan beberapa menit di tahap ini."
-        if size_mb > 40
-        else "📥 Nerima video, download dulu..."
-    )
+    size_note = f"{size_mb:.0f} MB" if size_mb else "ukuran belum diketahui"
+    status_msg = await update.message.reply_text("📥 Video diterima...")
 
-    INCOMING_DIR.mkdir(parents=True, exist_ok=True)
-    tg_file = await context.bot.get_file(
-        tg_video.file_id, read_timeout=900, connect_timeout=30
-    )
-    filename = getattr(tg_video, "file_name", None) or f"{tg_video.file_unique_id}.mp4"
-    local_path = INCOMING_DIR / filename
-    await tg_file.download_to_drive(str(local_path), read_timeout=900)
-
-    await _warn_if_metadata_stripped(local_path, sent_as_document, update.message)
-
-    await status_msg.edit_text(
-        f"⚙️ Diproses: {filename}\nBiasanya 3-5 menit (Gemini + upload + posting). "
-        "Status bakal keupdate tiap beberapa detik..."
-    )
-
-    try:
-        result = await _run_pipeline(local_path, status_msg)
-    except Exception as exc:  # noqa: BLE001 — report, don't crash the bot
-        log.exception("[bot] pipeline crashed")
-        result = f"💥 Error gak terduga: {type(exc).__name__}: {exc}"
-
-    # The result must reach the user even if editing the status message
-    # fails (e.g. a transient network blip on a long-polling connection) —
-    # otherwise the pipeline can finish successfully and the user never
-    # finds out. Fall back to a brand-new message if the edit fails.
-    try:
-        await status_msg.edit_text(result, disable_web_page_preview=True)
-    except Exception:  # noqa: BLE001
-        log.exception("[bot] failed to edit status message, sending fresh one")
+    # The clock starts before get_file, not after: with a Local Bot API
+    # Server that call blocks for minutes on a big file, and that silent
+    # gap is exactly where a run previously looked dead.
+    async with LiveStatus(
+        status_msg,
+        f"Ambil video dari Telegram ({size_note})...",
+    ) as status:
         try:
-            await update.message.reply_text(result, disable_web_page_preview=True)
-        except Exception:  # noqa: BLE001
-            log.exception("[bot] failed to send result even as a new message")
+            INCOMING_DIR.mkdir(parents=True, exist_ok=True)
+            tg_file = await context.bot.get_file(
+                tg_video.file_id, read_timeout=900, connect_timeout=30
+            )
+            filename = (
+                getattr(tg_video, "file_name", None) or f"{tg_video.file_unique_id}.mp4"
+            )
+            local_path = INCOMING_DIR / filename
+            status.set(f"Simpan {filename}...")
+            await tg_file.download_to_drive(str(local_path), read_timeout=900)
 
-    await _send_tiktok_kit(update.message, local_path)
+            await _warn_if_metadata_stripped(
+                local_path, sent_as_document, update.message
+            )
+
+            status.set(
+                "⚙️ Mulai proses...",
+                note="Biasanya 3-5 menit: Gemini → Drive → watermark → posting.",
+            )
+            result = await _run_pipeline(local_path, status)
+        except Exception as exc:  # noqa: BLE001 — report, don't crash the bot
+            log.exception("[bot] pipeline crashed")
+            result = f"💥 Error gak terduga: {type(exc).__name__}: {exc}"
+            local_path = None
+
+        await status.finish(result)
+
+    if local_path is not None:
+        await _send_tiktok_kit(update.message, local_path)
 
 
 async def _warn_if_metadata_stripped(
