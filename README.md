@@ -224,9 +224,21 @@ feed post still gets the full-length clip.
 > pasted over the footage and undoes the restraint the watermark is going
 > for. Add a native sticker in the Instagram app instead.
 
-### 6. TikTok (Playwright fallback)
+### 6. TikTok (manual by design)
 
-The official **Content Posting API** requires app-review approval. While you wait (or if you don't want to apply), this pipeline drives TikTok Studio with Playwright.
+**TikTok is deliberately left out of `PLATFORMS`.** Every other platform
+publishes over an API; TikTok has none available here, so posting means
+driving TikTok Studio in a real browser. That rules out the always-on box
+the bot runs on: Playwright ships no official Chromium for ARM64 Linux,
+and the board has ~800MB of free RAM against a heavy single-page app.
+
+Instead the Telegram bot replies with the watermarked file and the
+caption in a one-tap-copy block, so posting is save-and-upload on the
+phone that sent the video — a few seconds, and nothing to break.
+
+The Playwright path below still exists and works **on a desktop**, if you
+want TikTok automated for runs you start from the Mac. It can't serve
+bot-triggered runs.
 
 1. `playwright install chromium` (one-time, already in quick-start).
 2. Run the login helper:
