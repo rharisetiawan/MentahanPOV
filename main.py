@@ -305,18 +305,14 @@ def main() -> int:
 
     story_video = post_video
     if set(platforms) & STORY_PLATFORMS:
-        # Measure the posting copy, not the master: the watermark step caps
-        # the long edge at 1920, so a 4K source ends up narrower here and
-        # the CTA banner has to be sized against what it's drawn onto.
-        post_w, _ = video_facts.probe_dimensions(post_video)
         story_video = watermark.make_story_copy(
             post_video,
             output_path=config.posting_copy_dir
             / f"{state.video_key(video)}_story.mp4",
             duration_s=facts.duration_s,
-            video_width=post_w,
         )
-        log.info("Story copy ready: %s", story_video)
+        if story_video != post_video:
+            log.info("Story copy ready: %s", story_video)
 
     extra_urls, temp_ids = step_publish_urls(post_video, story_video, platforms)
     try:

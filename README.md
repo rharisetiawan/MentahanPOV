@@ -27,7 +27,7 @@ mentahanpov/
 │   ├── geocode.py           # GPS -> street address (OpenStreetMap Nominatim, free)
 │   ├── gdrive.py            # Drive upload + folder resolution + share + URL
 │   ├── gemini.py            # SOP V3 caption/filename/folder generator (JSON)
-│   ├── watermark.py         # master -> watermarked posting copy + story cut w/ CTA
+│   ├── watermark.py         # master -> watermarked posting copy + story cut
 │   └── state.py             # idempotent JSON state log
 ├── assets/                  # watermark-logo.png lives here (auto-placeholder if missing)
 ├── distributors/
@@ -217,6 +217,12 @@ permanent Reel/video, not a replacement. Two things differ from feed posts:
 Instagram rejects story videos longer than 60s, so anything longer is
 trimmed to its first 60 seconds with a stream copy (no re-encode). The
 feed post still gets the full-length clip.
+
+> Stories show the same frame as the feed post — centred logo, nothing
+> else. Don't be tempted to burn a call-to-action banner into the video
+> to work around the API accepting no caption: it reads as a dialog box
+> pasted over the footage and undoes the restraint the watermark is going
+> for. Add a native sticker in the Instagram app instead.
 
 ### 6. TikTok (Playwright fallback)
 
