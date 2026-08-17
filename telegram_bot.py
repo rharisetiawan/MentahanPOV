@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import html
 import logging
 import re
 import sys
@@ -32,6 +33,7 @@ from telegram import Update
 from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
 from config import config
+from core import state as pipeline_state
 from core import video_facts
 
 log = logging.getLogger("mentahanpov.bot")
@@ -210,6 +212,8 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         except Exception:  # noqa: BLE001
             log.exception("[bot] failed to send result even as a new message")
 
+    await _send_tiktok_kit(update.message, local_path)
+
 
 async def _warn_if_metadata_stripped(
     local_path: Path, sent_as_document: bool, message
@@ -251,6 +255,46 @@ async def _warn_if_metadata_stripped(
         await message.reply_text(hint, parse_mode="Markdown")
     except Exception:  # noqa: BLE001
         log.exception("[bot] failed to send metadata warning")
+
+
+async def _send_tiktok_kit(message, source_video: Path) -> None:
+    """Send back everything needed to post this clip to TikTok by hand.
+
+    TikTok is the one platform this pipeline can't publish to from the
+    always-on box: it has no official API here, so it needs a real browser
+    driving TikTok Studio — which won't run on an ARM board with ~800MB of
+    free RAM. Rather than automate it badly, the bot hands over the exact
+    watermarked file and caption so posting is a save-and-upload on the
+    phone that's already in your hand.
+    """
+    entry = pipeline_state.get(config.state_file, source_video)
+    caption = entry.get("caption")
+    copy_path = entry.get("posting_copy_path")
+    if not caption or not copy_path:
+        return
+    # State stores this relative to the repo root; resolve it explicitly so
+    # the lookup doesn't depend on the bot's working directory.
+    copy_file = Path(copy_path)
+    if not copy_file.is_absolute():
+        copy_file = REPO_ROOT / copy_file
+    if not copy_file.exists():
+        log.warning("[bot] posting copy missing, skipping TikTok kit: %s", copy_file)
+        return
+
+    try:
+        with copy_file.open("rb") as fh:
+            await message.reply_document(
+                document=fh,
+                filename=copy_file.name,
+                caption="📱 Buat TikTok — simpan video ini, captionnya di bawah 👇",
+            )
+        # <pre> gives Telegram's one-tap copy button, and escaping means the
+        # caption's own punctuation can't break the markup.
+        await message.reply_text(
+            f"<pre>{html.escape(caption)}</pre>", parse_mode="HTML"
+        )
+    except Exception:  # noqa: BLE001 — the pipeline already succeeded
+        log.exception("[bot] failed to send TikTok kit")
 
 
 async def handle_other(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
