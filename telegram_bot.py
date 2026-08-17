@@ -30,6 +30,7 @@ import sys
 from pathlib import Path
 
 from telegram import Update
+from telegram import error as telegram_error
 from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
 from config import config
@@ -178,13 +179,21 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Kirim file video ya (bukan foto/link).")
         return
 
-    status_msg = await update.message.reply_text("📥 Nerima video, download dulu...")
+    size_mb = (getattr(tg_video, "file_size", 0) or 0) / 1048576
+    status_msg = await update.message.reply_text(
+        f"📥 Nerima video ({size_mb:.0f} MB), download dulu...\n"
+        "File besar bisa makan beberapa menit di tahap ini."
+        if size_mb > 40
+        else "📥 Nerima video, download dulu..."
+    )
 
     INCOMING_DIR.mkdir(parents=True, exist_ok=True)
-    tg_file = await context.bot.get_file(tg_video.file_id)
+    tg_file = await context.bot.get_file(
+        tg_video.file_id, read_timeout=900, connect_timeout=30
+    )
     filename = getattr(tg_video, "file_name", None) or f"{tg_video.file_unique_id}.mp4"
     local_path = INCOMING_DIR / filename
-    await tg_file.download_to_drive(str(local_path))
+    await tg_file.download_to_drive(str(local_path), read_timeout=900)
 
     await _warn_if_metadata_stripped(local_path, sent_as_document, update.message)
 
@@ -306,7 +315,30 @@ async def handle_other(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log the failure *and* tell the chat about it.
+
+    Logging alone meant a crash looked identical to a slow run: the status
+    message just sat at "downloading" forever with no way to tell whether
+    to keep waiting.
+    """
     log.error("[bot] unhandled exception", exc_info=context.error)
+    message = getattr(update, "effective_message", None)
+    if message is None:
+        return
+    err = context.error
+    if isinstance(err, telegram_error.TimedOut):
+        text = (
+            "⏱️ Timeout waktu ambil video dari Telegram.\n\n"
+            "Kalau videonya besar banget, coba kirim ulang — "
+            "server lokal biasanya sudah menyimpan sebagian, jadi "
+            "percobaan kedua lebih cepat."
+        )
+    else:
+        text = f"💥 Gagal: {type(err).__name__}: {err}"
+    try:
+        await message.reply_text(text)
+    except Exception:  # noqa: BLE001
+        log.exception("[bot] could not report the error to the chat")
 
 
 def main() -> None:
@@ -319,7 +351,20 @@ def main() -> None:
             "TELEGRAM_BOT_TOKEN is empty. See telegram_bot.py's docstring → 'Setup'."
         )
 
-    builder = Application.builder().token(config.telegram_bot_token)
+    builder = (
+        Application.builder()
+        .token(config.telegram_bot_token)
+        # getFile against a Local Bot API Server blocks while that server
+        # pulls the whole file from Telegram — minutes for the untouched HD
+        # masters this is built for. The library's 5s default aborts long
+        # before that and the video is silently dropped. Sending the TikTok
+        # kit back pushes tens of MB the other way, hence the write budget.
+        .connect_timeout(30)
+        .read_timeout(900)
+        .write_timeout(900)
+        .pool_timeout(60)
+        .media_write_timeout(1800)
+    )
     if config.telegram_api_id and config.telegram_api_hash:
         # Route through a Local Bot API Server (see README → "Telegram
         # bot") so file downloads aren't capped at api.telegram.org's
