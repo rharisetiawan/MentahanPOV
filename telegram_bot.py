@@ -42,10 +42,17 @@ log = logging.getLogger("mentahanpov.bot")
 
 REPO_ROOT = Path(__file__).parent
 INCOMING_DIR = REPO_ROOT / "incoming"
-PIPELINE_TIMEOUT_S = 15 * 60  # generous — Gemini + 3 uploads can take a while
+RUN_LOG_DIR = REPO_ROOT / "state" / "run_logs"
+# The HG680P is a weak ARM board: watermark rendering, the HD master
+# upload, and five sequential platform posts have measured close to 15
+# minutes end to end on it. That used to be the timeout itself, so a
+# slightly slower run got killed with no explanation. 30 minutes gives
+# real headroom; a run that's actually stuck is still caught, just later.
+PIPELINE_TIMEOUT_S = 30 * 60
 STATUS_TICK_S = 5  # seconds between status redraws (Telegram edit-rate safe)
 
 _FINAL_STATE_RE = re.compile(r"Final state: (\{.*\})\s*$")
+_GDRIVE_PCT_RE = re.compile(r"\[gdrive\] (\d+)%")
 
 # Substring -> friendly status text. Checked in order against every log
 # line as it streams in; the last match found "wins" as the current stage.
@@ -107,6 +114,34 @@ def _format_result(returncode: int, stdout: str, stderr: str) -> str:
     tail = (stdout[-1500:] + "\n" + stderr[-1000:]).strip()
     status = "selesai" if returncode == 0 else f"gagal (exit {returncode})"
     return f"Proses {status}, tapi gak nemu ringkasan hasil. Log terakhir:\n```\n{tail}\n```"
+
+
+def _format_partial_result(video_path: Path, header: str, log_path: Path) -> str:
+    """What to report when the subprocess had to be killed mid-run.
+
+    main.py records each platform's result to STATE_FILE as it finishes —
+    not just at the end — so even a killed run usually has real,
+    cross-checkable links for whatever completed before the cutoff. This
+    reads that state back instead of leaving the user with a bare
+    "timed out" and no way to tell what, if anything, actually posted.
+    """
+    entry = pipeline_state.get(config.state_file, video_path)
+    platforms = entry.get("platforms", {})
+    lines = [header]
+    if platforms:
+        for name, info in platforms.items():
+            if info.get("status") == "ok":
+                lines.append(f"✅ {name}: {info.get('url')}")
+            else:
+                lines.append(f"❌ {name}: {info.get('error')}")
+        done = {*platforms}
+        pending = [p for p in config.platforms if p not in done]
+        if pending:
+            lines.append(f"❔ belum sempat dicoba: {', '.join(pending)}")
+    else:
+        lines.append("Belum ada platform yang sempat selesai diproses.")
+    lines.append(f"\nLog lengkap: {log_path}")
+    return "\n".join(lines)
 
 
 class LiveStatus:
@@ -183,23 +218,45 @@ async def _run_pipeline(video_path: Path, status: LiveStatus) -> str:
         stderr=asyncio.subprocess.STDOUT,
     )
 
+    # main.py's own stdout/stderr only ever lived in an in-memory list
+    # before this — invisible to `docker compose logs` and gone forever if
+    # the process got killed on timeout. Persisting it as it streams means
+    # a run that goes wrong can actually be cross-checked afterward instead
+    # of guessed at.
+    RUN_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = RUN_LOG_DIR / f"{pipeline_state.video_key(video_path)}.log"
+
     lines: list[str] = []
 
     async def _read_stream() -> None:
         assert proc.stdout is not None
-        async for raw in proc.stdout:
-            line = raw.decode(errors="replace").rstrip()
-            lines.append(line)
-            for needle, message in _STAGE_PATTERNS:
-                if needle in line:
-                    status.set(message)
+        with log_path.open("w", encoding="utf-8") as log_fh:
+            async for raw in proc.stdout:
+                line = raw.decode(errors="replace").rstrip()
+                lines.append(line)
+                log_fh.write(line + "\n")
+                log_fh.flush()
+
+                pct = _GDRIVE_PCT_RE.search(line)
+                if pct:
+                    status.set(f"☁️ Upload video HD ke Google Drive... {pct.group(1)}%")
+                    continue
+                for needle, message in _STAGE_PATTERNS:
+                    if needle in line:
+                        status.set(message)
 
     try:
         await asyncio.wait_for(_read_stream(), timeout=PIPELINE_TIMEOUT_S)
         returncode = await proc.wait()
     except asyncio.TimeoutError:
         proc.kill()
-        return "⏱️ Kelamaan (>15 menit), aku hentiin. Cek manual lewat terminal."
+        await proc.wait()
+        minutes = PIPELINE_TIMEOUT_S // 60
+        return _format_partial_result(
+            video_path,
+            f"⏱️ Lewat {minutes} menit, aku hentiin paksa. Yang sempat kepublish:",
+            log_path,
+        )
 
     return _format_result(returncode, "\n".join(lines), "")
 
