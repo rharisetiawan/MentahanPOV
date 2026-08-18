@@ -69,7 +69,7 @@ class Config:
     # Fraction of the posting copy's width, not a pixel count: a fixed px
     # size would read as huge on a 720p clip and invisible on 4K.
     watermark_width_pct: float = field(
-        default_factory=lambda: float(_env("WATERMARK_WIDTH_PCT", "0.26"))
+        default_factory=lambda: float(_env("WATERMARK_WIDTH_PCT", "0.18"))
     )
     posting_copy_dir: Path = field(
         default_factory=lambda: Path(

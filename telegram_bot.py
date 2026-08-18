@@ -145,23 +145,34 @@ def _format_partial_result(video_path: Path, header: str, log_path: Path) -> str
 
 
 class LiveStatus:
-    """A single chat message that keeps ticking while work happens.
+    """A single chat message that keeps ticking while work happens, plus
+    a periodic checkpoint PING as its own new message.
 
     Editing only when the stage *changes* leaves the message frozen for
     minutes at a time — during the Telegram download, or while Gemini
     thinks — which is indistinguishable from a crash from the user's side.
     So the elapsed clock and a spinner are redrawn on every tick, giving
     the text something that always moves.
+
+    That's still not enough on its own: Telegram doesn't notify on message
+    *edits*, so if you're not already staring at the chat there's no signal
+    at all for minutes at a stretch. A checkpoint is sent as a fresh
+    message every CHECKPOINT_INTERVAL_S instead — a real notification —
+    saying how long it's been and whether that's still comfortably inside
+    the timeout or starting to cut it close.
     """
 
     _FRAMES = "◐◓◑◒"
+    CHECKPOINT_INTERVAL_S = 180  # 3 min — real ping, not just an edit
 
-    def __init__(self, message, stage: str) -> None:
+    def __init__(self, message, stage: str, *, timeout_s: int = PIPELINE_TIMEOUT_S) -> None:
         self._message = message
         self._stage = stage
         self._note = ""
         self._start = time.monotonic()
         self._tick = 0
+        self._timeout_s = timeout_s
+        self._last_checkpoint = 0.0
         self._task: asyncio.Task | None = None
 
     def set(self, stage: str, note: str = "") -> None:
@@ -176,6 +187,24 @@ class LiveStatus:
         text = f"{spinner} {clock} · {self._stage}"
         return f"{text}\n{self._note}" if self._note else text
 
+    async def _maybe_checkpoint(self) -> None:
+        elapsed = time.monotonic() - self._start
+        if elapsed - self._last_checkpoint < self.CHECKPOINT_INTERVAL_S:
+            return
+        self._last_checkpoint = elapsed
+        mins = int(elapsed // 60)
+        remaining = self._timeout_s - elapsed
+        if remaining <= 5 * 60:
+            warn = f"\n⚠️ Sisa ~{max(0, int(remaining // 60))} menit sebelum dihentikan otomatis."
+        else:
+            warn = "\n✅ Masih on track, belum dekat batas waktu."
+        try:
+            await self._message.reply_text(
+                f"⏳ Checkpoint {mins} menit — {self._stage}{warn}"
+            )
+        except Exception:  # noqa: BLE001 — a missed ping shouldn't kill the run
+            log.exception("[bot] failed to send checkpoint ping")
+
     async def _loop(self) -> None:
         while True:
             await asyncio.sleep(STATUS_TICK_S)
@@ -184,6 +213,7 @@ class LiveStatus:
                 await self._message.edit_text(self._render())
             except Exception:  # noqa: BLE001 — a dropped frame is harmless
                 pass
+            await self._maybe_checkpoint()
 
     async def __aenter__(self) -> "LiveStatus":
         self._task = asyncio.create_task(self._loop())

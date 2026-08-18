@@ -275,11 +275,15 @@ picks it up automatically.
 ```env
 WATERMARK_LOGO_PATH=./assets/watermark-logo.png
 WATERMARK_OPACITY=0.35
-# Logo width as a fraction of video width (0.26 = 26%), NOT pixels — a
+# Logo width as a fraction of video width (0.18 = 18%), NOT pixels — a
 # fixed px size reads as huge on a 720p clip and vanishes on 4K.
-WATERMARK_WIDTH_PCT=0.26
+WATERMARK_WIDTH_PCT=0.18
 POSTING_COPY_DIR=./state/posting_copies
 ```
+
+The logo itself is a solid-white recolour of the brand mark (alpha
+channel kept, RGB flattened to white) — a multi-colour logo at low
+opacity reads as a smudge, white stays legible as a single clean shape.
 
 The logo is centred in the frame. Centre placement is harder to crop out
 than a corner, which is the point of a watermark on freely-redistributed
