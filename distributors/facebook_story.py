@@ -22,13 +22,10 @@ import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import config
+from distributors.meta_graph import graph_url
 
 log = logging.getLogger(__name__)
 PLATFORM = "facebook_story"
-
-
-def _graph(path: str) -> str:
-    return f"https://graph.facebook.com/{config.graph_api_version}/{path}"
 
 
 def _ok(resp: requests.Response) -> bool:
@@ -53,7 +50,7 @@ def post(video_path: Path, caption: str, **_: Any) -> dict[str, str]:
         raise RuntimeError("FB_PAGE_ID / FB_PAGE_ACCESS_TOKEN missing.")
 
     token = config.fb_page_access_token
-    endpoint = _graph(f"{config.fb_page_id}/video_stories")
+    endpoint = graph_url(f"{config.fb_page_id}/video_stories")
 
     # Phase 1 — reserve a video id and get the upload host.
     start = requests.post(

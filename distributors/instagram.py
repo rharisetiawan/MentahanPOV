@@ -18,7 +18,6 @@ Requirements:
 from __future__ import annotations
 
 import logging
-import time
 from pathlib import Path
 from typing import Any
 
@@ -26,35 +25,10 @@ import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import config
+from distributors.meta_graph import graph_url, wait_container_finished
 
 log = logging.getLogger(__name__)
 PLATFORM = "instagram"
-
-
-def _graph(path: str) -> str:
-    return f"https://graph.facebook.com/{config.graph_api_version}/{path}"
-
-
-def _wait_finished(creation_id: str, timeout: int = 600) -> None:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        r = requests.get(
-            _graph(creation_id),
-            params={
-                "fields": "status_code,status",
-                "access_token": config.fb_page_access_token,
-            },
-            timeout=30,
-        )
-        r.raise_for_status()
-        status = r.json().get("status_code")
-        log.info("[instagram] container %s status=%s", creation_id, status)
-        if status == "FINISHED":
-            return
-        if status in {"ERROR", "EXPIRED"}:
-            raise RuntimeError(f"IG container {creation_id} failed: {r.json()}")
-        time.sleep(5)
-    raise TimeoutError(f"IG container {creation_id} not FINISHED after {timeout}s")
 
 
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=2, min=4, max=30))
@@ -74,7 +48,7 @@ def post(
 
     log.info("[instagram] creating container for %s", video_path.name)
     create = requests.post(
-        _graph(f"{config.ig_user_id}/media"),
+        graph_url(f"{config.ig_user_id}/media"),
         data={
             "media_type": "REELS",
             "video_url": post_url,
@@ -88,10 +62,10 @@ def post(
     if not creation_id:
         raise RuntimeError(f"IG container creation returned no id: {create.json()}")
 
-    _wait_finished(creation_id)
+    wait_container_finished(creation_id)
 
     publish = requests.post(
-        _graph(f"{config.ig_user_id}/media_publish"),
+        graph_url(f"{config.ig_user_id}/media_publish"),
         data={"creation_id": creation_id, "access_token": config.fb_page_access_token},
         timeout=120,
     )
@@ -104,7 +78,7 @@ def post(
     perma_url: str | None = None
     try:
         meta = requests.get(
-            _graph(media_id),
+            graph_url(media_id),
             params={"fields": "permalink", "access_token": config.fb_page_access_token},
             timeout=30,
         ).json()

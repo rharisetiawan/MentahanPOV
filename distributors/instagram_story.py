@@ -18,7 +18,7 @@ import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import config
-from distributors.instagram import _graph, _wait_finished
+from distributors.meta_graph import graph_url, wait_container_finished
 
 log = logging.getLogger(__name__)
 PLATFORM = "instagram_story"
@@ -35,7 +35,7 @@ def post(
 
     log.info("[instagram_story] creating story container for %s", video_path.name)
     create = requests.post(
-        _graph(f"{config.ig_user_id}/media"),
+        graph_url(f"{config.ig_user_id}/media"),
         data={
             "media_type": "STORIES",
             "video_url": story_url,
@@ -48,10 +48,10 @@ def post(
     if not creation_id:
         raise RuntimeError(f"IG story container returned no id: {create.json()}")
 
-    _wait_finished(creation_id)
+    wait_container_finished(creation_id)
 
     publish = requests.post(
-        _graph(f"{config.ig_user_id}/media_publish"),
+        graph_url(f"{config.ig_user_id}/media_publish"),
         data={"creation_id": creation_id, "access_token": config.fb_page_access_token},
         timeout=120,
     )

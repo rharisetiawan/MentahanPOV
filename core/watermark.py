@@ -137,6 +137,7 @@ def make_posting_copy(video_path: Path, *, output_path: Path) -> Path:
 # higher, but one trimmed file keeps both platforms on identical footage.
 STORY_MAX_S = 60
 
+
 def make_story_copy(posting_copy: Path, *, output_path: Path, duration_s: int) -> Path:
     """Return a story-safe cut of `posting_copy` (<= STORY_MAX_S).
 

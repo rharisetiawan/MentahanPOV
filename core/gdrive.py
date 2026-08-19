@@ -17,14 +17,13 @@ import mimetypes
 from pathlib import Path
 from typing import Any
 
-from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import config
+from core import google_auth
 
 log = logging.getLogger(__name__)
 
@@ -32,36 +31,11 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 
 def _get_creds() -> Credentials:
-    creds: Credentials | None = None
-    token_path = config.gdrive_token_file
-    secrets_path = config.youtube_client_secrets  # same OAuth client, different scope
-
-    if token_path.exists():
-        creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-
-    if creds and creds.valid:
-        return creds
-
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-    else:
-        if not secrets_path.exists():
-            raise FileNotFoundError(
-                f"OAuth client secrets not found at {secrets_path}. "
-                "See README → 'Google Drive setup'."
-            )
-        flow = InstalledAppFlow.from_client_secrets_file(str(secrets_path), SCOPES)
-        # prompt=select_account forces Google to show the account chooser
-        # instead of silently reusing whichever session already has this
-        # scope+client consented (which may not be the account that owns
-        # the Drive folder).
-        creds = flow.run_local_server(
-            port=0, prompt="select_account", open_browser=False
-        )
-
-    token_path.parent.mkdir(parents=True, exist_ok=True)
-    token_path.write_text(creds.to_json(), encoding="utf-8")
-    return creds
+    return google_auth.get_credentials(
+        token_path=config.gdrive_token_file,
+        secrets_path=config.youtube_client_secrets,  # same OAuth client, different scope
+        scopes=SCOPES,
+    )
 
 
 def _service() -> Any:

@@ -14,13 +14,10 @@ import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import config
+from distributors.meta_graph import graph_url
 
 log = logging.getLogger(__name__)
 PLATFORM = "facebook"
-
-
-def _graph(path: str) -> str:
-    return f"https://graph.facebook.com/{config.graph_api_version}/{path}"
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
@@ -31,7 +28,7 @@ def post(video_path: Path, caption: str, **_: Any) -> dict[str, str]:
     log.info("[facebook] uploading %s to page %s", video_path.name, config.fb_page_id)
     with video_path.open("rb") as fh:
         resp = requests.post(
-            _graph(f"{config.fb_page_id}/videos"),
+            graph_url(f"{config.fb_page_id}/videos"),
             data={
                 "description": caption,
                 "access_token": config.fb_page_access_token,

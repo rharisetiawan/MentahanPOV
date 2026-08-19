@@ -26,12 +26,14 @@ mentahanpov/
 │   ├── video_facts.py       # ffprobe: date, duration, resolution, GPS
 │   ├── geocode.py           # GPS -> street address (OpenStreetMap Nominatim, free)
 │   ├── gdrive.py            # Drive upload + folder resolution + share + URL
+│   ├── google_auth.py       # shared OAuth2 flow (used by gdrive.py + distributors/youtube.py)
 │   ├── gemini.py            # SOP V3 caption/filename/folder generator (JSON)
 │   ├── watermark.py         # master -> watermarked posting copy + story cut
 │   └── state.py             # idempotent JSON state log
 ├── assets/                  # watermark-logo.png lives here (auto-placeholder if missing)
 ├── distributors/
 │   ├── youtube.py           # YouTube Data API v3
+│   ├── meta_graph.py        # shared Graph API helpers (used by the 4 modules below)
 │   ├── facebook.py          # Graph API /{page}/videos
 │   ├── facebook_story.py    # Graph API /{page}/video_stories (3-phase upload)
 │   ├── instagram.py         # Graph API Reels
@@ -40,8 +42,12 @@ mentahanpov/
 ├── prompts/sop_v3.txt       # Gemini prompt template
 ├── requirements.txt
 ├── .env.example
+├── CONTRIBUTING.md          # architecture + how to add a platform/account
 └── .gitignore
 ```
+
+> New here? `CONTRIBUTING.md` has the full pipeline walkthrough and the
+> steps for adding a new platform or a second account.
 
 ## Prerequisites
 
@@ -333,6 +339,35 @@ needed, this just needs to stay running somewhere with your credentials.
 > 3-5 minutes per video. Run the bot on your own machine or any small
 > always-on box (even a Raspberry Pi) instead.
 
+#### Removing the 20MB download cap
+
+By default the bot talks to the public `api.telegram.org`, which refuses to
+hand over any file over 20MB — raw phone footage routinely exceeds that.
+Fix it by running your own **Local Bot API Server** (Telegram's official
+`telegram-bot-api` binary/Docker image) alongside the bot, which downloads
+files locally instead with no size limit:
+
+1. Go to <https://my.telegram.org> → **API development tools** → create an
+   app → copy the **api_id** and **api_hash** it gives you.
+2. Run the server (Docker is simplest):
+   ```bash
+   docker run -d --name telegram-bot-api -p 8081:8081 \
+     -e TELEGRAM_API_ID=<api_id> -e TELEGRAM_API_HASH=<api_hash> \
+     -v telegram-bot-api-data:/var/lib/telegram-bot-api \
+     aiogram/telegram-bot-api:latest --local
+   ```
+3. Add to `.env`:
+   ```env
+   TELEGRAM_API_ID=<api_id>
+   TELEGRAM_API_HASH=<api_hash>
+   TELEGRAM_LOCAL_API_URL=http://localhost:8081
+   ```
+
+`telegram_bot.py` picks this up automatically on startup (see the "using
+Local Bot API Server" log line) — no code changes needed. Leave
+`TELEGRAM_API_ID`/`TELEGRAM_API_HASH` empty to keep using the public API
+(fine as long as your source videos stay under 20MB).
+
 #### Keeping the bot running
 
 Simplest: a dedicated terminal tab, or `screen`/`tmux` so it survives you
@@ -400,9 +435,19 @@ Re-running `main.py` on the same file will skip every platform whose status is `
 
 ## Roadmap / extensibility
 
-- Drop a new file into `distributors/` exposing `post(video, caption, *, gdrive_url=None) -> dict`, then register it in `PLATFORM_REGISTRY` in `main.py`. That's it.
+Adding a new platform (or a new destination on an existing one, e.g. a
+second account) means dropping a new file into `distributors/` and wiring
+it into `main.py`. See `CONTRIBUTING.md` for the full walkthrough — short
+version:
+
+1. Expose `post(video_path, caption, *, gdrive_url=None, post_url=None, story_url=None, **_) -> {"id": str, "url": str}` in the new module. Accept `**_` so it silently ignores kwargs meant for other platforms.
+2. Register it in `PLATFORM_REGISTRY` in `main.py`.
+3. If it needs a **public URL** rather than raw bytes (like Instagram — see `distributors/instagram.py`'s docstring), add its name to `NEEDS_POST_URL` or `NEEDS_STORY_URL` in `main.py` so `step_publish_urls` stages a Drive link for it automatically.
+4. If it's a Story-type destination (24h expiry, no permanent caption), add its name to `STORY_PLATFORMS` so it gets the trimmed/story copy instead of the feed copy.
+5. Facebook/Instagram distributors share Graph API plumbing — see `distributors/meta_graph.py` (`graph_url`, `wait_container_finished`) before writing new Graph API calls from scratch.
+
 - Swap the TikTok Playwright module for an HTTP client once your Content Posting API app is approved.
-- For larger Reels, upload first to S3/R2 and pass that URL to `instagram.post(..., gdrive_url=<s3_url>)`.
+- For larger Reels, upload first to S3/R2 instead of Drive and pass that URL through `extra_urls` in `main.py`'s `step_publish_urls`.
 
 ## Security notes
 
