@@ -119,19 +119,20 @@ def _upload_and_wait(client: genai.Client, video_path: Path) -> genai_types.File
 
 
 # Gemini's "high demand" 503s are Google-side and have outlasted a short
-# backoff window in practice (seen twice in one day against
-# gemini-2.5-flash). This retries only the generation+parse step, not the
-# upload above — redoing a multi-hundred-MB upload on every retry would
-# waste real minutes on slow hardware for no reason once the bytes are
-# already sitting in the File API. ~5+10+20+40+60s across 5 waits gives a
-# demand spike roughly 2-3 minutes to clear before giving up.
+# backoff window in practice (seen repeatedly in one day against
+# gemini-2.5-flash, one run spending 7+ minutes straight 503ing). This
+# retries only the generation+parse step, not the upload above — redoing
+# a multi-hundred-MB upload on every retry would waste real minutes on
+# slow hardware for no reason once the bytes are already sitting in the
+# File API. ~5+10+20+40+60s across 5 waits gives a demand spike roughly
+# 2-3 minutes to clear before giving up on this model.
 @retry(stop=stop_after_attempt(6), wait=wait_exponential(multiplier=5, min=5, max=60))
 def _generate_and_parse(
-    client: genai.Client, file: genai_types.File, prompt: str
+    client: genai.Client, file: genai_types.File, prompt: str, model: str
 ) -> tuple[dict, str]:
-    log.info("[gemini] generating SOP V3 metadata with %s", config.gemini_model)
+    log.info("[gemini] generating SOP V3 metadata with %s", model)
     response = client.models.generate_content(
-        model=config.gemini_model,
+        model=model,
         contents=[file, prompt],
         config=genai_types.GenerateContentConfig(
             temperature=0.85,
@@ -176,11 +177,30 @@ def generate_metadata(
         duration_s=duration_s,
         resolution=resolution,
     )
-    data, raw = _generate_and_parse(client, file, prompt)
 
-    return GeminiOutput(
-        caption=_tidy_caption(data["caption"]),
-        file_name=data["file_name"],
-        folder=data["folder"],
-        raw=raw,
-    )
+    # A "high demand" 503 tends to be specific to one model's capacity
+    # pool — often the newest release, which is where demand spikes
+    # concentrate — so a model that's still fully capable but not the one
+    # everyone's currently hammering is a free way to ride it out instead
+    # of just waiting. Only kicks in once GEMINI_MODEL has exhausted its
+    # own retries above; same file, no re-upload either way.
+    models = [config.gemini_model]
+    if config.gemini_fallback_model and config.gemini_fallback_model not in models:
+        models.append(config.gemini_fallback_model)
+
+    last_exc: Exception | None = None
+    for model in models:
+        try:
+            data, raw = _generate_and_parse(client, file, prompt, model)
+            return GeminiOutput(
+                caption=_tidy_caption(data["caption"]),
+                file_name=data["file_name"],
+                folder=data["folder"],
+                raw=raw,
+            )
+        except Exception as exc:  # noqa: BLE001 — try the next model, if any
+            last_exc = exc
+            log.warning("[gemini] %s exhausted its retries: %s", model, exc)
+
+    assert last_exc is not None  # models is never empty
+    raise last_exc

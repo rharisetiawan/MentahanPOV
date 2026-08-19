@@ -56,6 +56,14 @@ class Config:
     gemini_model: str = field(
         default_factory=lambda: _env("GEMINI_MODEL", "gemini-2.5-flash")
     )
+    # Tried only after GEMINI_MODEL exhausts its own retries on a 503
+    # "high demand" error — a different model's capacity pool is often
+    # less contested, especially right after a new model's release draws
+    # a demand spike. Set empty to disable and just fail after GEMINI_MODEL
+    # gives up.
+    gemini_fallback_model: str = field(
+        default_factory=lambda: _env("GEMINI_FALLBACK_MODEL", "gemini-2.0-flash")
+    )
 
     # Watermark / posting-copy rendering
     watermark_logo_path: Path = field(
