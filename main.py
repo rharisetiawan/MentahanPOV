@@ -15,11 +15,11 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from config import config
-from core import gdrive, geocode, gemini, state, video_facts, watermark
+from core import gdrive, gemini, geocode, state, video_facts, watermark
 from distributors import (
     facebook,
     facebook_story,

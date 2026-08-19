@@ -77,7 +77,7 @@ def _load_prompt(
 
 
 def _wait_active(
-    client: "genai.Client", file: "genai_types.File", timeout: int = 300
+    client: genai.Client, file: genai_types.File, timeout: int = 300
 ) -> None:
     """Poll until uploaded video is ACTIVE (Gemini File API processes async)."""
     deadline = time.time() + timeout

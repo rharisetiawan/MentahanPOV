@@ -215,7 +215,7 @@ class LiveStatus:
                 pass
             await self._maybe_checkpoint()
 
-    async def __aenter__(self) -> "LiveStatus":
+    async def __aenter__(self) -> LiveStatus:
         self._task = asyncio.create_task(self._loop())
         return self
 
