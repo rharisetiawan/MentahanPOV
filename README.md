@@ -43,12 +43,17 @@ mentahanpov/
 ├── prompts/sop_v3.txt       # Gemini prompt template
 ├── requirements.txt
 ├── .env.example
+├── Dockerfile               # production deployment — see DEPLOYMENT.md
+├── docker-compose.yml
 ├── CONTRIBUTING.md          # architecture + how to add a platform/account
+├── DEPLOYMENT.md            # production (Docker) setup + incident log
 └── .gitignore
 ```
 
 > New here? `CONTRIBUTING.md` has the full pipeline walkthrough and the
-> steps for adding a new platform or a second account.
+> steps for adding a new platform or a second account. Running this in
+> production (Docker Compose, not the bare `python telegram_bot.py` below)?
+> See `DEPLOYMENT.md`.
 
 ## Prerequisites
 
