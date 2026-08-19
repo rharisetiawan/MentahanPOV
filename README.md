@@ -241,55 +241,60 @@ carry over here, even if FB/IG are already fully set up.
 You need:
 - A Threads **Professional** (Business or Creator) account — same
   restriction as Instagram; a personal profile has no publishing API.
+- **A dedicated Meta app.** Unlike Facebook/Instagram, Threads can't be
+  added as a product to an existing app — the docs are explicit: *"create
+  an app and pick the Threads Use Case."* Creating one gets you a separate
+  **Threads app ID and secret**, distinct from any other app you have.
 
-Steps:
+Steps (all in the [App Dashboard](https://developers.facebook.com/apps/) —
+no manual OAuth redirect juggling needed, since you're both the app owner
+and the account holder here):
 
-1. Go to <https://developers.facebook.com/apps> → use the **same app** as
-   your Facebook/Instagram setup (or create one), then add the product
-   **Threads API** to it.
-2. **App settings → Threads API → Settings** → add a redirect URI (any
-   `https://` URL you control works, even a placeholder like
-   `https://localhost/callback` for a one-off manual token generation —
-   Threads only redirects your browser there with a `?code=` param, it
-   doesn't need to actually be live).
-3. Build the authorization URL (replace placeholders) and open it in a
-   browser logged into the `mentahanpov` Threads account:
-
-   ```text
-   https://threads.net/oauth/authorize?client_id=<APP_ID>&redirect_uri=<REDIRECT_URI>&scope=threads_basic,threads_content_publish&response_type=code
-   ```
-
-   Approve it; you'll land on your redirect URI with `?code=<CODE>` in the
-   address bar — copy that code (URL-decode it if it contains `%23` etc.).
-4. Exchange the code for a short-lived token, then that for a long-lived one:
-
-   ```bash
-   curl -s -X POST "https://graph.threads.net/oauth/access_token" \
-     -F "client_id=<APP_ID>" -F "client_secret=<APP_SECRET>" \
-     -F "grant_type=authorization_code" -F "redirect_uri=<REDIRECT_URI>" \
-     -F "code=<CODE>"
-   # → { "access_token": "<SHORT_LIVED>", "user_id": ... }
-
-   curl -s "https://graph.threads.net/access_token?grant_type=th_exchange_token&client_secret=<APP_SECRET>&access_token=<SHORT_LIVED>"
-   # → { "access_token": "<LONG_LIVED>", "expires_in": 5184000 }  (~60 days)
-   ```
-
-5. Confirm the user id and username match your account:
+1. **Create App** → any name → **Use cases** step → pick **"Access the
+   Threads API"** → **Business** step → "I don't want to connect a
+   business portfolio yet" is fine for a single-account setup → **Create
+   app** (re-enter your Meta password if prompted).
+2. **Use cases → Customize → Permissions and features** → click **Add**
+   next to `threads_content_publish` (`threads_basic` is enabled
+   automatically). These two are all `distributors/threads.py` needs.
+3. **App roles → Roles → Add People** → role **Threads Tester** → enter
+   the `mentahanpov` Threads username → **Add**. This sends an invite; it
+   does **not** grant access by itself.
+4. **Accept the invite from the Threads side** — log into
+   threads.com/threads.net as `mentahanpov` → profile → **More → Settings
+   → More settings → Website permissions → Invites** tab → **Accept**.
+   (This step has to happen as the Threads account, not the Meta developer
+   account — they're allowed to be different logins.)
+5. Back in **Use cases → Customize → Settings**, scroll to **User Token
+   Generator** — `mentahanpov` now appears there once step 4 is done.
+   Click **Generate Access Token** and copy it. This single click hands
+   you an already-long-lived token; there's no separate exchange step.
+6. Get the Threads user id to go with it:
 
    ```bash
-   curl -s "https://graph.threads.net/v1.0/me?fields=id,username&access_token=<LONG_LIVED>"
+   curl -s "https://graph.threads.net/v1.0/me?fields=id,username&access_token=<TOKEN_FROM_STEP_5>"
    ```
 
 ```env
-THREADS_USER_ID=<id from step 5>
-THREADS_ACCESS_TOKEN=<long-lived token from step 4>
+THREADS_USER_ID=<id from step 6>
+THREADS_ACCESS_TOKEN=<token from step 5>
 THREADS_API_VERSION=v1.0
 ```
 
-> The long-lived token lasts ~60 days, same rotation cadence as the FB
-> Page token — repeat the `th_exchange_token` call (with the still-valid
-> current token) before it expires to get a fresh 60-day one without
-> redoing the browser authorization step.
+> The token is long-lived (~60 days — confirm via
+> `curl -s "https://graph.threads.net/v1.0/debug_token?input_token=<TOKEN>&access_token=<TOKEN>"`,
+> compare `expires_at` to `issued_at`). Refresh before expiry with:
+> `curl -s "https://graph.threads.net/refresh_access_token?grant_type=th_refresh_token&access_token=<CURRENT_TOKEN>"`
+> — no need to repeat steps 1-5, the tester relationship persists.
+
+> **If you don't administer the Threads account yourself** (e.g. it
+> belongs to a client), the Tester flow above can't work — they'd have to
+> either accept a Tester invite themselves (steps 3-4), or you fall back
+> to the standard OAuth Authorization Window (`threads.net/oauth/authorize`
+> → code → `graph.threads.net/oauth/access_token` → `th_exchange_token`),
+> which needs a Redirect Callback URL set under the same Settings tab.
+> See [Meta's Threads API docs](https://developers.facebook.com/docs/threads)
+> for that flow's exact parameters.
 
 Threads isn't in the default `PLATFORMS` list yet — add it once the token
 above is set:
