@@ -66,8 +66,10 @@ class Config:
     watermark_opacity: float = field(
         default_factory=lambda: float(_env("WATERMARK_OPACITY", "0.35"))
     )
-    watermark_width_px: int = field(
-        default_factory=lambda: int(_env("WATERMARK_WIDTH_PX", "260"))
+    # Fraction of the posting copy's width, not a pixel count: a fixed px
+    # size would read as huge on a 720p clip and invisible on 4K.
+    watermark_width_pct: float = field(
+        default_factory=lambda: float(_env("WATERMARK_WIDTH_PCT", "0.18"))
     )
     posting_copy_dir: Path = field(
         default_factory=lambda: Path(
@@ -99,6 +101,9 @@ class Config:
         default_factory=lambda: _env("FB_PAGE_ACCESS_TOKEN")
     )
     ig_user_id: str = field(default_factory=lambda: _env("IG_USER_ID"))
+    # Only used to build a human-clickable story link in the run summary —
+    # the Graph API doesn't return permalinks for stories.
+    ig_username: str = field(default_factory=lambda: _env("IG_USERNAME"))
     graph_api_version: str = field(
         default_factory=lambda: _env("GRAPH_API_VERSION", "v19.0")
     )
@@ -113,11 +118,45 @@ class Config:
         default_factory=lambda: _env("TIKTOK_HEADLESS", "false").lower() == "true"
     )
 
+    # Telegram bot front-end (see telegram_bot.py)
+    telegram_bot_token: str = field(
+        default_factory=lambda: _env("TELEGRAM_BOT_TOKEN")
+    )
+    # Comma-separated numeric Telegram user ids. Empty = anyone with the
+    # bot's link can trigger it — set this unless you want that.
+    telegram_allowed_user_ids: tuple[int, ...] = field(
+        default_factory=lambda: tuple(
+            int(u) for u in _env("TELEGRAM_ALLOWED_USER_IDS", "").split(",") if u.strip()
+        )
+    )
+    # Optional override of --platforms for bot-triggered runs. Empty = use
+    # main.py's own PLATFORMS default.
+    telegram_platforms: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            p.strip() for p in _env("TELEGRAM_PLATFORMS", "").split(",") if p.strip()
+        )
+    )
+    # From https://my.telegram.org -> API development tools. Only needed to
+    # run a Local Bot API Server (see README) — the default api.telegram.org
+    # caps file downloads at 20MB, too small for raw phone footage.
+    telegram_api_id: str = field(default_factory=lambda: _env("TELEGRAM_API_ID"))
+    telegram_api_hash: str = field(default_factory=lambda: _env("TELEGRAM_API_HASH"))
+    # Base URL of a running Local Bot API Server. Used automatically once
+    # TELEGRAM_API_ID/HASH are set; override if it's not on localhost:8081.
+    telegram_local_api_url: str = field(
+        default_factory=lambda: _env("TELEGRAM_LOCAL_API_URL", "http://localhost:8081")
+    )
+
     # Orchestration
     platforms: tuple[str, ...] = field(
         default_factory=lambda: tuple(
             p.strip()
-            for p in _env("PLATFORMS", "youtube,facebook,instagram,tiktok").split(",")
+            for p in _env(
+                "PLATFORMS",
+                # TikTok is opt-in: it needs a one-off Playwright login, and
+                # listing it before that makes every run report a failure.
+                "youtube,facebook,instagram,facebook_story,instagram_story",
+            ).split(",")
             if p.strip()
         )
     )

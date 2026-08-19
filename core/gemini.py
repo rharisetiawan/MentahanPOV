@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,16 +36,40 @@ class GeminiOutput:
 
 
 def _load_prompt(
-    *, date: str, address: str, coordinates: str, duration_s: int, resolution: str
+    *,
+    date: str,
+    address: str | None,
+    coordinates: str | None,
+    duration_s: int,
+    resolution: str,
 ) -> str:
     if not PROMPT_PATH.exists():
         raise FileNotFoundError(f"SOP V3 prompt not found at {PROMPT_PATH}")
     template = PROMPT_PATH.read_text(encoding="utf-8")
     folders_list = "\n".join(f"- {f}" for f in config.drive_categories)
+
+    # With no GPS in the file there is nothing honest to print, so the whole
+    # location line — and the location half of the file name — is dropped
+    # rather than filled with "not available", which previously leaked into
+    # captions and produced names like 20260813_NO_LOCATION_....
+    # Deriving <LOCATION> is left to Gemini rather than parsed here: picking
+    # the city out of a Nominatim address ("…Sukun, Kota Malang, Klojen,
+    # Jawa Timur, 65147, Indonesia") by position gets the province wrong as
+    # often as not.
+    if address and coordinates:
+        address_fact = f"- Address: {address}"
+        location_line = f"📍 Location: {address} ({coordinates})"
+        filename_pattern = f"{date}_<LOCATION>_<VIBE>_{duration_s}s_{resolution}.mp4"
+    else:
+        address_fact = "- Address: (none — this file carries no GPS)"
+        location_line = ""
+        filename_pattern = f"{date}_<VIBE>_{duration_s}s_{resolution}.mp4"
+
     return (
         template.replace("{{DATE}}", date)
-        .replace("{{ADDRESS}}", address)
-        .replace("{{COORDINATES}}", coordinates)
+        .replace("{{ADDRESS_FACT}}", address_fact)
+        .replace("{{LOCATION_LINE}}", location_line)
+        .replace("{{FILENAME_PATTERN}}", filename_pattern)
         .replace("{{DURATION_S}}", str(duration_s))
         .replace("{{RESOLUTION}}", resolution)
         .replace("{{FOLDERS_LIST}}", folders_list)
@@ -64,6 +89,16 @@ def _wait_active(
             raise RuntimeError(f"Gemini file {file.name} failed processing")
         time.sleep(3)
     raise TimeoutError(f"Gemini file {file.name} not ACTIVE after {timeout}s")
+
+
+def _tidy_caption(caption: str) -> str:
+    """Collapse the gap left behind when the location line is omitted.
+
+    The template has a blank line on either side of the location line, so
+    dropping it leaves three consecutive newlines. Asking the model to
+    handle that itself is unreliable, so it's normalised here instead.
+    """
+    return re.sub(r"\n{3,}", "\n\n", caption).strip()
 
 
 def _parse_json(raw: str) -> dict:
@@ -125,7 +160,7 @@ def generate_metadata(
         )
 
     return GeminiOutput(
-        caption=data["caption"],
+        caption=_tidy_caption(data["caption"]),
         file_name=data["file_name"],
         folder=data["folder"],
         raw=raw,

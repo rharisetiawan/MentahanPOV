@@ -72,6 +72,15 @@ def _parse_gps(tags: dict) -> tuple[float, float] | None:
     return float(m.group(1)), float(m.group(2))
 
 
+def probe_dimensions(video_path: Path) -> tuple[int, int]:
+    """(width, height) of the first video stream, or (0, 0) if unreadable."""
+    info = _ffprobe_json(video_path)
+    stream = next(
+        (s for s in info.get("streams", []) if s.get("codec_type") == "video"), {}
+    )
+    return int(stream.get("width", 0)), int(stream.get("height", 0))
+
+
 def extract_facts(video_path: Path) -> VideoFacts:
     info = _ffprobe_json(video_path)
     fmt = info.get("format", {})

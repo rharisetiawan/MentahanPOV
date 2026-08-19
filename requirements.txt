@@ -16,5 +16,8 @@ google-genai>=0.3.0
 # TikTok (browser automation fallback)
 playwright>=1.42.0
 
+# Telegram bot front-end (telegram_bot.py)
+python-telegram-bot>=21.0
+
 # Dev / lint (optional)
 ruff>=0.4.0

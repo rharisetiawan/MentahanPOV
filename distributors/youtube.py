@@ -49,8 +49,13 @@ def _get_creds() -> Credentials:
                 "See README → 'YouTube setup'."
             )
         flow = InstalledAppFlow.from_client_secrets_file(str(secrets_path), SCOPES)
-        # Opens browser for first-time auth, then caches token.
-        creds = flow.run_local_server(port=0)
+        # prompt=select_account forces the account chooser instead of
+        # silently reusing whichever session already consented to this
+        # client+scope. open_browser=False since auto-open doesn't work in
+        # every environment — the caller prints/opens the URL manually.
+        creds = flow.run_local_server(
+            port=0, prompt="select_account", open_browser=False
+        )
 
     token_path.parent.mkdir(parents=True, exist_ok=True)
     token_path.write_text(creds.to_json(), encoding="utf-8")

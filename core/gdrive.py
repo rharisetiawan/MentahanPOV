@@ -93,6 +93,66 @@ def resolve_category_folder_id(category_name: str) -> str:
     return files[0]["id"]
 
 
+def direct_download_url(file_id: str) -> str:
+    """A URL that serves the file bytes directly, for third-party fetchers.
+
+    Instagram's Graph API downloads `video_url` itself, so it must receive
+    actual video bytes. The classic `drive.google.com/uc?export=download`
+    form only does that for small files: past ~100 MB Drive answers with an
+    HTML "Google Drive can't scan this file for viruses" interstitial
+    instead, and the platform fetch fails. The usercontent host with
+    `confirm=t` skips that interstitial at any size.
+    """
+    return (
+        "https://drive.usercontent.google.com/download"
+        f"?id={file_id}&export=download&confirm=t"
+    )
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
+def resolve_or_create_folder(name: str, *, parent_id: str | None = None) -> str:
+    """Return the id of folder `name`, creating it if absent.
+
+    `parent_id` defaults to My Drive's root. Staging folders deliberately
+    live there rather than inside GDRIVE_FOLDER_ID: that folder is the
+    link-in-bio archive people browse, and a `_posting-temp` directory
+    appearing in it would be visible to every visitor.
+    """
+    svc = _service()
+    safe_name = name.replace("'", "\\'")
+    parent = parent_id or "root"
+    query = (
+        f"'{parent}' in parents and name = '{safe_name}' "
+        "and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    )
+    files = svc.files().list(q=query, fields="files(id)").execute().get("files", [])
+    if files:
+        return files[0]["id"]
+    created = (
+        svc.files()
+        .create(
+            body={
+                "name": name,
+                "mimeType": "application/vnd.google-apps.folder",
+                "parents": [parent],
+            },
+            fields="id",
+        )
+        .execute()
+    )
+    log.info("[gdrive] created folder %s (%s)", name, created["id"])
+    return created["id"]
+
+
+def delete_file(file_id: str) -> None:
+    """Best-effort delete; never raises (used for cleanup of temp uploads)."""
+    try:
+        _service().files().delete(fileId=file_id).execute()
+        log.info("[gdrive] deleted temp file %s", file_id)
+    except Exception as exc:  # noqa: BLE001 — cleanup must never break a run
+        log.warning("[gdrive] could not delete temp file %s: %s", file_id, exc)
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
 def upload_video(
     video_path: Path,

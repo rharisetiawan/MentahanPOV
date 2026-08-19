@@ -72,19 +72,37 @@ def _ensure_logo() -> Path:
     return logo_path
 
 
+def _posting_width(video_path: Path) -> int:
+    """Width the posting copy will have after the 1920 long-edge cap."""
+    from core.video_facts import probe_dimensions
+
+    w, h = probe_dimensions(video_path)
+    if not w or not h:
+        return 1080
+    if w > h:
+        return min(1920, w)
+    capped_h = min(1920, h)
+    return max(2, round(w * capped_h / h))
+
+
 def make_posting_copy(video_path: Path, *, output_path: Path) -> Path:
-    """Render a watermarked, feed-sized copy of `video_path` at `output_path`."""
+    """Render a watermarked, feed-sized copy of `video_path` at `output_path`.
+
+    The master is never touched — it goes to Drive as-is, un-watermarked and
+    un-recompressed — so this copy exists purely for the social platforms.
+    """
     logo_path = _ensure_logo()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    wm_width = max(2, round(_posting_width(video_path) * config.watermark_width_pct))
     scale_filter = (
         "scale='if(gt(iw,ih),min(1920,iw),-2)':'if(gt(iw,ih),-2,min(1920,ih))'"
     )
     filter_complex = (
         f"[0:v]{scale_filter}[base];"
         f"[1:v]format=rgba,colorchannelmixer=aa={config.watermark_opacity},"
-        f"scale={config.watermark_width_px}:-1[wm];"
-        "[base][wm]overlay=W-w-24:H-h-24"
+        f"scale={wm_width}:-1[wm];"
+        "[base][wm]overlay=(W-w)/2:(H-h)/2"
     )
     cmd = [
         "ffmpeg",
@@ -112,4 +130,48 @@ def make_posting_copy(video_path: Path, *, output_path: Path) -> Path:
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg watermark render failed:\n{result.stderr[-4000:]}")
+    return output_path
+
+
+# Instagram rejects story videos longer than this; Facebook's limit is
+# higher, but one trimmed file keeps both platforms on identical footage.
+STORY_MAX_S = 60
+
+def make_story_copy(posting_copy: Path, *, output_path: Path, duration_s: int) -> Path:
+    """Return a story-safe cut of `posting_copy` (<= STORY_MAX_S).
+
+    Stories carry exactly the same frame as the feed post — the centred
+    logo and nothing else. An earlier version burned a call-to-action
+    banner in here; it looked like a dialog box pasted over the footage
+    and was cut. If a story ever needs a caption, it belongs in
+    Instagram's own sticker, not rendered into the pixels.
+
+    Clips already within the limit are reused untouched, so most runs skip
+    this entirely; longer ones are cut with a stream copy — no re-encode,
+    so no second generation of quality loss.
+    """
+    if duration_s <= STORY_MAX_S:
+        return posting_copy
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(posting_copy),
+        "-t",
+        str(STORY_MAX_S),
+        "-c",
+        "copy",
+        str(output_path),
+    ]
+    log.info(
+        "[watermark] clip is %ss; trimming to %ss for stories -> %s",
+        duration_s,
+        STORY_MAX_S,
+        output_path,
+    )
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg story trim failed:\n{result.stderr[-4000:]}")
     return output_path

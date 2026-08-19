@@ -20,19 +20,22 @@ video file ─► ffprobe facts ─► reverse geocode ─► Gemini SOP V3 (JSO
 ```
 mentahanpov/
 ├── main.py                  # CLI entry point
+├── telegram_bot.py          # optional Telegram front-end, runs main.py per video
 ├── config.py                # env loader + typed config
 ├── core/
 │   ├── video_facts.py       # ffprobe: date, duration, resolution, GPS
-│   ├── geocode.py           # GPS -> street address (Google Geocoding API)
+│   ├── geocode.py           # GPS -> street address (OpenStreetMap Nominatim, free)
 │   ├── gdrive.py            # Drive upload + folder resolution + share + URL
 │   ├── gemini.py            # SOP V3 caption/filename/folder generator (JSON)
-│   ├── watermark.py         # master -> watermarked, feed-sized posting copy
+│   ├── watermark.py         # master -> watermarked posting copy + story cut
 │   └── state.py             # idempotent JSON state log
 ├── assets/                  # watermark-logo.png lives here (auto-placeholder if missing)
 ├── distributors/
 │   ├── youtube.py           # YouTube Data API v3
 │   ├── facebook.py          # Graph API /{page}/videos
+│   ├── facebook_story.py    # Graph API /{page}/video_stories (3-phase upload)
 │   ├── instagram.py         # Graph API Reels
+│   ├── instagram_story.py   # Graph API media_type=STORIES
 │   └── tiktok.py            # Playwright (login + post subcommands)
 ├── prompts/sop_v3.txt       # Gemini prompt template
 ├── requirements.txt
@@ -175,14 +178,67 @@ Steps:
 FB_PAGE_ID=<page id>
 FB_PAGE_ACCESS_TOKEN=<long-lived page token>
 IG_USER_ID=<instagram_business_account.id>
+IG_USERNAME=<handle without @>
 GRAPH_API_VERSION=v19.0
 ```
 
-> **Important for Instagram:** the API needs a **public HTTPS** URL pointing at the raw video. The pipeline passes the GDrive direct-download URL — works fine for short Reels (<300 MB). For larger files or higher reliability, replace `_drive_direct()` in `distributors/instagram.py` with an upload to S3/R2/Cloudinary.
+> **How Instagram gets the video.** Unlike YouTube and Facebook — which
+> accept an upload — Instagram only takes a **public HTTPS URL** and
+> fetches the bytes itself. Whatever that URL serves is what gets
+> published, so the pipeline uploads the *watermarked posting copy* to a
+> private `_posting-temp` folder on Drive, hands Instagram that link, and
+> deletes it once publishing finishes. Pointing it at the master's Drive
+> link instead would quietly publish un-watermarked footage.
+>
+> The URL uses the `drive.usercontent.google.com/...&confirm=t` form on
+> purpose: the older `drive.google.com/uc?export=download` link stops
+> returning video past roughly **100 MB** and serves an HTML "Google
+> Drive can't scan this file for viruses" page instead, which Instagram
+> fails on. `confirm=t` skips that interstitial at any size.
 
-### 6. TikTok (Playwright fallback)
+#### Stories (Facebook + Instagram)
 
-The official **Content Posting API** requires app-review approval. While you wait (or if you don't want to apply), this pipeline drives TikTok Studio with Playwright.
+Both are enabled by default via `PLATFORMS` and need no extra permissions
+beyond the scopes above:
+
+```env
+PLATFORMS=youtube,facebook,instagram,facebook_story,instagram_story
+```
+
+Stories expire after 24h — they're a reach booster on top of the
+permanent Reel/video, not a replacement. Two things differ from feed posts:
+
+- **Instagram** uses the same container flow with `media_type=STORIES`,
+  and carries **no caption** (the API accepts none).
+- **Facebook** doesn't use `/{page}/videos` at all; it uses the
+  three-phase `/{page}/video_stories` protocol (`start` → byte upload to
+  an `rupload.facebook.com` host → `finish`).
+
+Instagram rejects story videos longer than 60s, so anything longer is
+trimmed to its first 60 seconds with a stream copy (no re-encode). The
+feed post still gets the full-length clip.
+
+> Stories show the same frame as the feed post — centred logo, nothing
+> else. Don't be tempted to burn a call-to-action banner into the video
+> to work around the API accepting no caption: it reads as a dialog box
+> pasted over the footage and undoes the restraint the watermark is going
+> for. Add a native sticker in the Instagram app instead.
+
+### 6. TikTok (manual by design)
+
+**TikTok is deliberately left out of `PLATFORMS`.** Every other platform
+publishes over an API; TikTok has none available here, so posting means
+driving TikTok Studio in a real browser. That rules out the always-on box
+the bot runs on: Playwright ships no official Chromium for ARM64 Linux,
+and the board has ~800MB of free RAM against a heavy single-page app.
+
+Instead the Telegram bot replies with the watermarked file and the
+caption in a one-tap-copy block, so posting is save-and-upload on the
+phone that sent the video — a few seconds, and nothing to break.
+
+The Playwright path below still exists and works **on a desktop**, if you
+want TikTok automated for runs you start from the Mac. It can't serve
+bot-triggered runs.
 
 1. `playwright install chromium` (one-time, already in quick-start).
 2. Run the login helper:
@@ -219,9 +275,78 @@ picks it up automatically.
 ```env
 WATERMARK_LOGO_PATH=./assets/watermark-logo.png
 WATERMARK_OPACITY=0.35
-WATERMARK_WIDTH_PX=260
+# Logo width as a fraction of video width (0.18 = 18%), NOT pixels — a
+# fixed px size reads as huge on a 720p clip and vanishes on 4K.
+WATERMARK_WIDTH_PCT=0.18
 POSTING_COPY_DIR=./state/posting_copies
 ```
+
+The logo itself is a solid-white recolour of the brand mark (alpha
+channel kept, RGB flattened to white) — a multi-colour logo at low
+opacity reads as a smudge, white stays legible as a single clean shape.
+
+The logo is centred in the frame. Centre placement is harder to crop out
+than a corner, which is the point of a watermark on freely-redistributed
+footage — the trade-off is that it sits over the subject, so keep the
+opacity low (0.35 reads clearly without fighting the video).
+
+> **The watermark only ever touches the social copy.** The file uploaded
+> to Drive is the original master — no logo, no re-encode, no downscale.
+> That's the whole promise of the archive, so the pipeline renders a
+> separate posting copy rather than modifying the file it uploads.
+
+### 8. Telegram bot (optional — trigger from your phone)
+
+Skip this if you're happy running `python main.py` from a terminal. This
+is only for not having to touch a terminal at all: send a video to your
+bot from Telegram, get the result links back in chat.
+
+1. Message **@BotFather** on Telegram → `/newbot` → follow the prompts → copy the token it gives you.
+2. Message **@userinfobot** to find your own numeric Telegram user id (so randoms who find your bot's link can't trigger it).
+
+```env
+TELEGRAM_BOT_TOKEN=<paste token from BotFather>
+TELEGRAM_ALLOWED_USER_IDS=<your numeric id>
+```
+
+```bash
+python telegram_bot.py
+```
+
+Leave that running (see "Keeping the bot running" below), then open your
+bot in Telegram and send it a video file. It downloads to `./incoming/`,
+runs the same pipeline as the CLI (`main.py`) as a subprocess, and replies
+with the per-platform links or errors once done — no Vercel/hosting
+needed, this just needs to stay running somewhere with your credentials.
+
+> **Always send as 📎 → File, never from the Gallery.** Telegram
+> re-encodes anything sent as a "Video": a 64 MB 1080p clip arrives as a
+> 23 MB 720p one with every metadata tag stripped — including the
+> ISO-6709 `location` tag the caption's 📍 line is built from. Sent as a
+> **File** (Document), the bytes arrive untouched, so GPS and full
+> quality survive. The bot probes each upload and warns you in chat when
+> GPS is missing, but it can't recover what Telegram already discarded.
+
+> Long-running (ffmpeg watermarking, multi-platform uploads, browser-based
+> Playwright for TikTok) doesn't fit serverless platforms like Vercel —
+> execution-time limits are usually 10-60s, this pipeline routinely takes
+> 3-5 minutes per video. Run the bot on your own machine or any small
+> always-on box (even a Raspberry Pi) instead.
+
+#### Keeping the bot running
+
+Simplest: a dedicated terminal tab, or `screen`/`tmux` so it survives you
+closing the terminal:
+
+```bash
+screen -S mentahanpov-bot
+source .venv/bin/activate && python telegram_bot.py
+# Ctrl-A then D to detach; `screen -r mentahanpov-bot` to reattach
+```
+
+On macOS, `launchd` (or `pm2` via Node) will also auto-restart it on
+crash/reboot — out of scope here, but worth setting up once this is part
+of your daily routine.
 
 ---
 

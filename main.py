@@ -20,17 +20,32 @@ from typing import Callable
 
 from config import config
 from core import gdrive, geocode, gemini, state, video_facts, watermark
-from distributors import facebook, instagram, tiktok, youtube
+from distributors import (
+    facebook,
+    facebook_story,
+    instagram,
+    instagram_story,
+    tiktok,
+    youtube,
+)
 
 log = logging.getLogger("mentahanpov")
 
-# Platform name → callable(video_path, caption, *, gdrive_url=...)
+# Platform name → callable(video_path, caption, *, gdrive_url=, post_url=, story_url=)
 PLATFORM_REGISTRY: dict[str, Callable[..., dict[str, str]]] = {
     "youtube": youtube.post,
     "facebook": facebook.post,
     "instagram": instagram.post,
     "tiktok": tiktok.post,
+    "facebook_story": facebook_story.post,
+    "instagram_story": instagram_story.post,
 }
+
+# Platforms that publish by handing a URL to the platform instead of
+# uploading bytes — these force an upload of the watermarked copy.
+NEEDS_POST_URL = {"instagram"}
+NEEDS_STORY_URL = {"instagram_story"}
+STORY_PLATFORMS = {"facebook_story", "instagram_story"}
 
 
 def setup_logging(verbose: bool) -> None:
@@ -73,10 +88,22 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def step_geocode(facts: video_facts.VideoFacts) -> tuple[str, str]:
+def step_geocode(
+    facts: video_facts.VideoFacts,
+) -> tuple[str | None, str | None]:
+    """Resolve GPS to an address, or (None, None) when the file carries none.
+
+    Returning None rather than a placeholder string matters: the caption
+    builder drops the location line entirely when there's nothing real to
+    show, instead of publishing "Lokasi tidak tersedia".
+    """
     if not facts.gps:
-        log.warning("[geocode] no GPS in video metadata; caption will lack location")
-        return "Lokasi tidak tersedia", "-"
+        log.warning(
+            "[geocode] no GPS in video metadata — location line will be omitted. "
+            "If this came via Telegram, it was likely sent from the Gallery "
+            "(which strips metadata); send it as a File to keep GPS."
+        )
+        return None, None
     lat, lon = facts.gps
     coordinates = f"{lat:.6f}, {lon:.6f}"
     address = geocode.reverse_geocode(lat, lon) or coordinates
@@ -86,8 +113,8 @@ def step_geocode(facts: video_facts.VideoFacts) -> tuple[str, str]:
 def step_gemini(
     video: Path,
     facts: video_facts.VideoFacts,
-    address: str,
-    coordinates: str,
+    address: str | None,
+    coordinates: str | None,
     *,
     skip: bool,
 ) -> gemini.GeminiOutput:
@@ -151,11 +178,59 @@ def step_watermark(video: Path, *, skip: bool) -> Path:
     return out_path
 
 
+def step_publish_urls(
+    post_video: Path,
+    story_video: Path,
+    platforms: list[str],
+) -> tuple[dict[str, str], list[str]]:
+    """Upload the watermarked copies somewhere Meta can fetch them.
+
+    Instagram (feed + stories) downloads the video itself from a URL rather
+    than accepting an upload, so the watermarked copy has to be publicly
+    reachable for the duration of the post. These land in a private
+    `_posting-temp` folder — never the public archive — and are deleted in
+    `step_cleanup` once publishing is done.
+
+    Returns the kwargs to pass to distributors plus the Drive ids to clean up.
+    """
+    urls: dict[str, str] = {}
+    temp_ids: list[str] = []
+    needed = set(platforms)
+    if not (needed & (NEEDS_POST_URL | NEEDS_STORY_URL)):
+        return urls, temp_ids
+
+    # Deliberately NOT under GDRIVE_FOLDER_ID — that folder is the public
+    # link-in-bio archive, and staging files must not show up there.
+    temp_folder = gdrive.resolve_or_create_folder("_posting-temp")
+
+    if needed & NEEDS_POST_URL:
+        info = gdrive.upload_video(post_video, dest_folder_id=temp_folder)
+        temp_ids.append(info["id"])
+        urls["post_url"] = gdrive.direct_download_url(info["id"])
+
+    if needed & NEEDS_STORY_URL:
+        if story_video == post_video and "post_url" in urls:
+            urls["story_url"] = urls["post_url"]  # same file, no second upload
+        else:
+            info = gdrive.upload_video(story_video, dest_folder_id=temp_folder)
+            temp_ids.append(info["id"])
+            urls["story_url"] = gdrive.direct_download_url(info["id"])
+
+    return urls, temp_ids
+
+
+def step_cleanup(temp_ids: list[str]) -> None:
+    for file_id in temp_ids:
+        gdrive.delete_file(file_id)
+
+
 def step_distribute(
     video: Path,
     post_video: Path,
+    story_video: Path,
     caption: str,
     gdrive_url: str,
+    extra_urls: dict[str, str],
     platforms: list[str],
     force: bool,
 ) -> None:
@@ -170,7 +245,10 @@ def step_distribute(
             continue
         try:
             log.info("[%s] posting…", name)
-            result = PLATFORM_REGISTRY[name](post_video, caption, gdrive_url=gdrive_url)
+            upload = story_video if name in STORY_PLATFORMS else post_video
+            result = PLATFORM_REGISTRY[name](
+                upload, caption, gdrive_url=gdrive_url, **extra_urls
+            )
             state.mark_platform(
                 config.state_file,
                 video,
@@ -206,7 +284,10 @@ def main() -> int:
 
     facts = video_facts.extract_facts(video)
     address, coordinates = step_geocode(facts)
-    log.info("Location: %s (%s)", address, coordinates)
+    if address:
+        log.info("Location: %s (%s)", address, coordinates)
+    else:
+        log.info("Location: none in file metadata (line omitted from caption)")
 
     gemini_out = step_gemini(video, facts, address, coordinates, skip=args.skip_gemini)
     log.info("Folder: %s | file_name: %s", gemini_out.folder, gemini_out.file_name)
@@ -222,7 +303,33 @@ def main() -> int:
     post_video = step_watermark(video, skip=args.skip_watermark)
     log.info("Posting copy ready: %s", post_video)
 
-    step_distribute(video, post_video, gemini_out.caption, gdrive_url, platforms, args.force)
+    story_video = post_video
+    if set(platforms) & STORY_PLATFORMS:
+        story_video = watermark.make_story_copy(
+            post_video,
+            output_path=config.posting_copy_dir
+            / f"{state.video_key(video)}_story.mp4",
+            duration_s=facts.duration_s,
+        )
+        if story_video != post_video:
+            log.info("Story copy ready: %s", story_video)
+
+    extra_urls, temp_ids = step_publish_urls(post_video, story_video, platforms)
+    try:
+        step_distribute(
+            video,
+            post_video,
+            story_video,
+            gemini_out.caption,
+            gdrive_url,
+            extra_urls,
+            platforms,
+            args.force,
+        )
+    finally:
+        # Runs even if distribution raised, so a crash can't leave the
+        # watermarked copies sitting in Drive.
+        step_cleanup(temp_ids)
 
     final = state.get(config.state_file, video)
     log.info("Final state: %s", final.get("platforms"))
