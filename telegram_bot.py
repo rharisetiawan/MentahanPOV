@@ -46,9 +46,11 @@ RUN_LOG_DIR = REPO_ROOT / "state" / "run_logs"
 # The HG680P is a weak ARM board: watermark rendering, the HD master
 # upload, and five sequential platform posts have measured close to 15
 # minutes end to end on it. That used to be the timeout itself, so a
-# slightly slower run got killed with no explanation. 30 minutes gives
-# real headroom; a run that's actually stuck is still caught, just later.
-PIPELINE_TIMEOUT_S = 30 * 60
+# slightly slower run got killed with no explanation. Bumped from 30 to
+# 60 minutes for real headroom on this hardware (and room for more
+# platforms, e.g. Threads, in the sequential fan-out) — a run that's
+# actually stuck is still caught, just later.
+PIPELINE_TIMEOUT_S = 60 * 60
 STATUS_TICK_S = 5  # seconds between status redraws (Telegram edit-rate safe)
 
 _FINAL_STATE_RE = re.compile(r"Final state: (\{.*\})\s*$")
