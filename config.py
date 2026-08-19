@@ -61,8 +61,20 @@ class Config:
     # less contested, especially right after a new model's release draws
     # a demand spike. Set empty to disable and just fail after GEMINI_MODEL
     # gives up.
+    #
+    # Google retires model names with little warning (gemini-2.0-flash and
+    # even gemini-2.5-flash-lite both started 404ing "no longer available"
+    # sometime after this project's own knowledge cutoff) — if this starts
+    # 404ing, don't guess a replacement name from memory; list what's
+    # actually live first:
+    #   python -c "from google import genai; from config import config; \
+    #     [print(m.name) for m in genai.Client(api_key=config.gemini_api_key).models.list() \
+    #      if 'generateContent' in (m.supported_actions or [])]"
+    # ...and confirm the replacement actually accepts video input before
+    # trusting it, since retired models can still show up in that list:
+    #   client.models.generate_content(model=NAME, contents=[uploaded_file, "test"])
     gemini_fallback_model: str = field(
-        default_factory=lambda: _env("GEMINI_FALLBACK_MODEL", "gemini-2.0-flash")
+        default_factory=lambda: _env("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite")
     )
 
     # Watermark / posting-copy rendering
