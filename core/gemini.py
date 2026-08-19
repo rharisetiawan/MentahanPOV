@@ -111,32 +111,25 @@ def _parse_json(raw: str) -> dict:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
-def generate_metadata(
-    video_path: Path,
-    *,
-    date: str,
-    address: str,
-    coordinates: str,
-    duration_s: int,
-    resolution: str,
-) -> GeminiOutput:
-    if not config.gemini_api_key:
-        raise RuntimeError("GEMINI_API_KEY is empty. See README → 'Gemini setup'.")
-    client = genai.Client(api_key=config.gemini_api_key)
-
+def _upload_and_wait(client: genai.Client, video_path: Path) -> genai_types.File:
     log.info("[gemini] uploading %s to File API", video_path.name)
     file = client.files.upload(file=str(video_path))
     _wait_active(client, file)
+    return file
 
-    prompt = _load_prompt(
-        date=date,
-        address=address,
-        coordinates=coordinates,
-        duration_s=duration_s,
-        resolution=resolution,
-    )
+
+# Gemini's "high demand" 503s are Google-side and have outlasted a short
+# backoff window in practice (seen twice in one day against
+# gemini-2.5-flash). This retries only the generation+parse step, not the
+# upload above — redoing a multi-hundred-MB upload on every retry would
+# waste real minutes on slow hardware for no reason once the bytes are
+# already sitting in the File API. ~5+10+20+40+60s across 5 waits gives a
+# demand spike roughly 2-3 minutes to clear before giving up.
+@retry(stop=stop_after_attempt(6), wait=wait_exponential(multiplier=5, min=5, max=60))
+def _generate_and_parse(
+    client: genai.Client, file: genai_types.File, prompt: str
+) -> tuple[dict, str]:
     log.info("[gemini] generating SOP V3 metadata with %s", config.gemini_model)
-
     response = client.models.generate_content(
         model=config.gemini_model,
         contents=[file, prompt],
@@ -158,6 +151,32 @@ def generate_metadata(
             f"Gemini picked an unknown folder {data['folder']!r}; "
             f"expected one of {config.drive_categories}"
         )
+    return data, raw
+
+
+def generate_metadata(
+    video_path: Path,
+    *,
+    date: str,
+    address: str,
+    coordinates: str,
+    duration_s: int,
+    resolution: str,
+) -> GeminiOutput:
+    if not config.gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY is empty. See README → 'Gemini setup'.")
+    client = genai.Client(api_key=config.gemini_api_key)
+
+    file = _upload_and_wait(client, video_path)
+
+    prompt = _load_prompt(
+        date=date,
+        address=address,
+        coordinates=coordinates,
+        duration_s=duration_s,
+        resolution=resolution,
+    )
+    data, raw = _generate_and_parse(client, file, prompt)
 
     return GeminiOutput(
         caption=_tidy_caption(data["caption"]),
