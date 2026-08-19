@@ -38,6 +38,7 @@ mentahanpov/
 │   ├── facebook_story.py    # Graph API /{page}/video_stories (3-phase upload)
 │   ├── instagram.py         # Graph API Reels
 │   ├── instagram_story.py   # Graph API media_type=STORIES
+│   ├── threads.py           # Threads API (separate host/token from Graph API above)
 │   └── tiktok.py            # Playwright (login + post subcommands)
 ├── prompts/sop_v3.txt       # Gemini prompt template
 ├── requirements.txt
@@ -230,7 +231,79 @@ feed post still gets the full-length clip.
 > pasted over the footage and undoes the restraint the watermark is going
 > for. Add a native sticker in the Instagram app instead.
 
-### 6. TikTok (manual by design)
+### 6. Threads
+
+Threads is a **separate product from the Facebook/Instagram Graph API**
+above — different host (`graph.threads.net`), different OAuth flow,
+different access token. `FB_PAGE_ACCESS_TOKEN` / `IG_USER_ID` do **not**
+carry over here, even if FB/IG are already fully set up.
+
+You need:
+- A Threads **Professional** (Business or Creator) account — same
+  restriction as Instagram; a personal profile has no publishing API.
+
+Steps:
+
+1. Go to <https://developers.facebook.com/apps> → use the **same app** as
+   your Facebook/Instagram setup (or create one), then add the product
+   **Threads API** to it.
+2. **App settings → Threads API → Settings** → add a redirect URI (any
+   `https://` URL you control works, even a placeholder like
+   `https://localhost/callback` for a one-off manual token generation —
+   Threads only redirects your browser there with a `?code=` param, it
+   doesn't need to actually be live).
+3. Build the authorization URL (replace placeholders) and open it in a
+   browser logged into the `mentahanpov` Threads account:
+
+   ```text
+   https://threads.net/oauth/authorize?client_id=<APP_ID>&redirect_uri=<REDIRECT_URI>&scope=threads_basic,threads_content_publish&response_type=code
+   ```
+
+   Approve it; you'll land on your redirect URI with `?code=<CODE>` in the
+   address bar — copy that code (URL-decode it if it contains `%23` etc.).
+4. Exchange the code for a short-lived token, then that for a long-lived one:
+
+   ```bash
+   curl -s -X POST "https://graph.threads.net/oauth/access_token" \
+     -F "client_id=<APP_ID>" -F "client_secret=<APP_SECRET>" \
+     -F "grant_type=authorization_code" -F "redirect_uri=<REDIRECT_URI>" \
+     -F "code=<CODE>"
+   # → { "access_token": "<SHORT_LIVED>", "user_id": ... }
+
+   curl -s "https://graph.threads.net/access_token?grant_type=th_exchange_token&client_secret=<APP_SECRET>&access_token=<SHORT_LIVED>"
+   # → { "access_token": "<LONG_LIVED>", "expires_in": 5184000 }  (~60 days)
+   ```
+
+5. Confirm the user id and username match your account:
+
+   ```bash
+   curl -s "https://graph.threads.net/v1.0/me?fields=id,username&access_token=<LONG_LIVED>"
+   ```
+
+```env
+THREADS_USER_ID=<id from step 5>
+THREADS_ACCESS_TOKEN=<long-lived token from step 4>
+THREADS_API_VERSION=v1.0
+```
+
+> The long-lived token lasts ~60 days, same rotation cadence as the FB
+> Page token — repeat the `th_exchange_token` call (with the still-valid
+> current token) before it expires to get a fresh 60-day one without
+> redoing the browser authorization step.
+
+Threads isn't in the default `PLATFORMS` list yet — add it once the token
+above is set:
+
+```env
+PLATFORMS=youtube,facebook,instagram,facebook_story,instagram_story,threads
+```
+
+> **How Threads gets the video.** Same URL-fetch model as Instagram (see
+> the callout under Facebook/Instagram above) — it fetches bytes from
+> `post_url` itself, so the pipeline stages the watermarked posting copy
+> the same way, not the master.
+
+### 7. TikTok (manual by design)
 
 **TikTok is deliberately left out of `PLATFORMS`.** Every other platform
 publishes over an API; TikTok has none available here, so posting means
@@ -263,7 +336,7 @@ bot-triggered runs.
 
 > TikTok occasionally redesigns the upload page, which can break selectors. If `post()` raises "Could not find file input / caption box", run the login flow again and watch how the page renders — the selectors at the top of `distributors/tiktok.py` are easy to update.
 
-### 7. Watermark logo
+### 8. Watermark logo
 
 Nothing to configure — the first run auto-generates a placeholder
 "MentahanPOV" text logo at `WATERMARK_LOGO_PATH` (default
@@ -301,7 +374,7 @@ opacity low (0.35 reads clearly without fighting the video).
 > That's the whole promise of the archive, so the pipeline renders a
 > separate posting copy rather than modifying the file it uploads.
 
-### 8. Telegram bot (optional — trigger from your phone)
+### 9. Telegram bot (optional — trigger from your phone)
 
 Skip this if you're happy running `python main.py` from a terminal. This
 is only for not having to touch a terminal at all: send a video to your

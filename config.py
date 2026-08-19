@@ -108,6 +108,17 @@ class Config:
         default_factory=lambda: _env("GRAPH_API_VERSION", "v19.0")
     )
 
+    # Threads (separate product from the Facebook/Instagram Graph API above —
+    # different host, different OAuth flow, different token. See README →
+    # "Threads" for how to get threads_user_id / threads_access_token.)
+    threads_user_id: str = field(default_factory=lambda: _env("THREADS_USER_ID"))
+    threads_access_token: str = field(
+        default_factory=lambda: _env("THREADS_ACCESS_TOKEN")
+    )
+    threads_api_version: str = field(
+        default_factory=lambda: _env("THREADS_API_VERSION", "v1.0")
+    )
+
     # TikTok
     tiktok_storage_state: Path = field(
         default_factory=lambda: Path(
@@ -153,8 +164,12 @@ class Config:
             p.strip()
             for p in _env(
                 "PLATFORMS",
-                # TikTok is opt-in: it needs a one-off Playwright login, and
-                # listing it before that makes every run report a failure.
+                # TikTok and Threads are opt-in: TikTok needs a one-off
+                # Playwright login, Threads needs its own separately-issued
+                # access token — listing either before that setup is done
+                # makes every run report a failure. Add "threads" here (or
+                # to TELEGRAM_PLATFORMS) once THREADS_USER_ID/ACCESS_TOKEN
+                # are set.
                 "youtube,facebook,instagram,facebook_story,instagram_story",
             ).split(",")
             if p.strip()

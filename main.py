@@ -25,6 +25,7 @@ from distributors import (
     facebook_story,
     instagram,
     instagram_story,
+    threads,
     tiktok,
     youtube,
 )
@@ -36,6 +37,7 @@ PLATFORM_REGISTRY: dict[str, Callable[..., dict[str, str]]] = {
     "youtube": youtube.post,
     "facebook": facebook.post,
     "instagram": instagram.post,
+    "threads": threads.post,
     "tiktok": tiktok.post,
     "facebook_story": facebook_story.post,
     "instagram_story": instagram_story.post,
@@ -43,7 +45,7 @@ PLATFORM_REGISTRY: dict[str, Callable[..., dict[str, str]]] = {
 
 # Platforms that publish by handing a URL to the platform instead of
 # uploading bytes — these force an upload of the watermarked copy.
-NEEDS_POST_URL = {"instagram"}
+NEEDS_POST_URL = {"instagram", "threads"}
 NEEDS_STORY_URL = {"instagram_story"}
 STORY_PLATFORMS = {"facebook_story", "instagram_story"}
 
