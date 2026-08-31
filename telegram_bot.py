@@ -23,20 +23,33 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import datetime
 import html
 import logging
 import re
 import sys
 import time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from telegram import Update
 from telegram import error as telegram_error
-from telegram.ext import Application, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from config import config
+from core import health, video_facts
 from core import state as pipeline_state
-from core import video_facts
+
+# The HG680 doesn't necessarily run in the same timezone the daily report
+# should land in — hardcoded rather than trusting container TZ, which
+# Docker defaults to UTC unless explicitly set.
+_REPORT_TZ = ZoneInfo("Asia/Jakarta")
 
 log = logging.getLogger("mentahanpov.bot")
 
@@ -439,6 +452,46 @@ async def _send_tiktok_kit(message, source_video: Path) -> None:
         log.exception("[bot] failed to send TikTok kit")
 
 
+def _format_health_report(results: list[health.CheckResult]) -> str:
+    worst = "ok"
+    for r in results:
+        if r.status == "error":
+            worst = "error"
+            break
+        if r.status == "warning":
+            worst = "warning"
+    header = {
+        "ok": "✅ Semua integrasi normal",
+        "warning": "⚠️ Ada yang perlu diperhatikan",
+        "error": "❌ Ada yang rusak, perlu ditindaklanjuti",
+    }[worst]
+    lines = [f"{r.emoji} {r.name}: {r.detail}" for r in results]
+    return header + "\n\n" + "\n".join(lines)
+
+
+async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None or update.effective_user is None:
+        return
+    if not _allowed(update.effective_user.id):
+        return
+    msg = await update.message.reply_text("🔍 Ngecek Gemini, Google Drive, YouTube, Meta, Threads...")
+    # health.run_all() makes blocking network calls (requests, google-auth,
+    # google-genai) — off the event loop so it can't stall the bot's
+    # polling loop or any run already in progress.
+    results = await asyncio.to_thread(health.run_all)
+    await msg.edit_text(_format_health_report(results))
+
+
+async def daily_status_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    results = await asyncio.to_thread(health.run_all)
+    text = "📋 Laporan status harian\n\n" + _format_health_report(results)
+    for user_id in config.telegram_allowed_user_ids:
+        try:
+            await context.bot.send_message(chat_id=user_id, text=text)
+        except Exception:  # noqa: BLE001 — one recipient failing shouldn't skip the rest
+            log.exception("[bot] failed to send daily status to %s", user_id)
+
+
 async def handle_other(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
@@ -516,11 +569,30 @@ def main() -> None:
             "'Telegram bot' to remove that limit."
         )
     app = builder.build()
+    # CommandHandler must be registered before the filters.ALL catch-all
+    # below — same group, first match wins, and filters.ALL matches
+    # commands too.
+    app.add_handler(CommandHandler("status", handle_status))
     app.add_handler(
         MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video)
     )
     app.add_handler(MessageHandler(filters.ALL, handle_other))
     app.add_error_handler(handle_error)
+
+    if config.telegram_allowed_user_ids:
+        app.job_queue.run_daily(
+            daily_status_job,
+            time=datetime.time(hour=config.daily_status_hour, tzinfo=_REPORT_TZ),
+        )
+        log.info(
+            "[bot] daily status report scheduled for %02d:00 WIB",
+            config.daily_status_hour,
+        )
+    else:
+        log.warning(
+            "[bot] TELEGRAM_ALLOWED_USER_IDS empty — daily status report has "
+            "nowhere to send to, disabled. /status still works on demand."
+        )
 
     log.info("[bot] MentahanPOV bot starting (polling)...")
     app.run_polling()

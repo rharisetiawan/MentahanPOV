@@ -87,3 +87,149 @@ generate-content call so only the latter retries on failure (no point
 re-uploading a multi-hundred-MB video that already succeeded), and giving
 that retry more patience — 6 attempts over roughly 2-3 minutes instead of
 3 attempts over ~30s. See the commit for `core/gemini.py` for specifics.
+
+### 2026-08-19/20 — Gemini `429 Too Many Requests` + a retired fallback model
+
+The 503 fix above wasn't the end of it: the *next* run hit `429 Too Many
+Requests` instead — a quota/rate-limit error, not a capacity one, and a
+strong sign the Gemini API key is on the free tier (Google cut
+gemini-2.5-flash's free daily quota from ~250 to ~20 requests in late
+2025). Added `GEMINI_FALLBACK_MODEL`, tried automatically once the
+primary model exhausts its own retries.
+
+The first fallback picked (`gemini-2.0-flash`) turned out to be **retired**
+— 404 "no longer available". Worse, `gemini-2.5-flash-lite` also 404s
+despite still showing up in `client.models.list()` — that endpoint lists
+models "existing users" can still technically reach, not what's actually
+live for this API key. Replaced with `gemini-3.5-flash-lite`, confirmed
+by an actual `generate_content` call (text, then real video
+upload+generate) before trusting it — see the comment above
+`gemini_fallback_model` in `config.py` for the exact verification
+commands to run next time a model name needs replacing. Don't pick a
+replacement from memory or docs; both can be stale.
+
+Real end-to-end proof this was fixed: ran `core.gemini.generate_metadata`
+directly against the actual video that had been failing, inside the live
+container. It hit six 429s on `gemini-2.5-flash`, fell back to
+`gemini-3.5-flash-lite`, and succeeded on the first attempt — 318.7s
+total, real caption/filename/folder returned.
+
+**Underlying, not-fully-fixed risk:** Google retires Gemini model names
+with essentially no notice, and `models.list()` can't be trusted to only
+list what's actually callable. `core/health.py`'s Gemini checks now make
+a real (cheap) `generate_content` call against both `GEMINI_MODEL` and
+`GEMINI_FALLBACK_MODEL` daily — see "Status monitoring" below — so a
+retirement surfaces as a same-day alert instead of a failed run days
+later.
+
+### 2026-08-20 — Google OAuth (`invalid_grant: Token has been expired or revoked`)
+
+`gdrive-token.json` (and, it turned out, `youtube-token.json` too — same
+underlying cause) stopped refreshing. Root cause: the Google Cloud OAuth
+consent screen backing `credentials/youtube-oauth.json` is in **Testing**
+publishing status, not Production. Google expires refresh tokens issued
+to Testing-mode apps after a fixed ~7 days *from the original grant* —
+this does **not** reset just because the token gets successfully
+refreshed for its access-token in between, so "it worked yesterday" is no
+guarantee. Expect this to recur roughly weekly unless the app is moved to
+Production (which, for the `drive` scope, likely needs Google's
+verification process — not attempted yet).
+
+**Fix (temporary, repeats every ~7 days):** re-run the OAuth consent flow
+and drop the fresh token files in — see "Re-authenticating Google OAuth"
+below. Both `gdrive-token.json` and `youtube-token.json` come from the
+same OAuth client (`credentials/youtube-oauth.json`), so redo both at the
+same time even if only one has started failing yet.
+
+**Verified, not just assumed fixed:** after generating fresh tokens,
+called `gdrive.resolve_category_folder_id(...)` and `youtube._get_creds()`
+for real against the live account inside the running container, rather
+than trusting that "the OAuth flow completed without an error" was
+sufficient proof.
+
+## Re-authenticating Google OAuth
+
+Needed whenever `core/gdrive.py` or `distributors/youtube.py` raises
+`google.auth.exceptions.RefreshError` (`invalid_grant`), or `/status` /
+the dashboard flags Google Drive or YouTube as broken. The OAuth
+consent flow (`InstalledAppFlow.run_local_server()`) opens a local HTTP
+server and needs a real browser to hit it — the HG680 is headless, so do
+this from a machine that has both Python and a browser (this project's
+dev laptop), then copy the resulting token files over. Trying to run the
+flow directly on the HG680 would mean port-forwarding a browser on
+another device back to it, which is unnecessary extra work when the
+token files themselves aren't tied to any particular machine.
+
+1. Grab the shared client secrets file from the box (same file backs both
+   Drive and YouTube tokens):
+   ```bash
+   scp root@<box-ip>:/www/apps/mentahanpov/credentials/youtube-oauth.json ./credentials/
+   ```
+2. On the dev machine, with this repo's deps installed, run the OAuth
+   flow for each scope that needs refreshing (drive, youtube, or both):
+   ```python
+   from pathlib import Path
+   from google_auth_oauthlib.flow import InstalledAppFlow
+
+   SECRETS = Path("credentials/youtube-oauth.json")
+   for name, scopes, out in [
+       ("drive", ["https://www.googleapis.com/auth/drive"], Path("credentials/gdrive-token.json")),
+       ("youtube", ["https://www.googleapis.com/auth/youtube.upload"], Path("credentials/youtube-token.json")),
+   ]:
+       flow = InstalledAppFlow.from_client_secrets_file(str(SECRETS), scopes)
+       creds = flow.run_local_server(port=0, prompt="select_account", open_browser=False)
+       out.write_text(creds.to_json(), encoding="utf-8")
+   ```
+3. Each call prints a `https://accounts.google.com/o/oauth2/auth?...` URL
+   — open it in a real browser, **log in as the account that actually owns
+   the Drive folder and YouTube channel** (not just whichever Google
+   account happens to be signed in), and click Allow. The page will land
+   on a bare `localhost` URL after — that's expected, the script already
+   has what it needs.
+4. Copy the fresh token files back to the box and confirm they're
+   world-readable by the container's user, then verify for real (bind
+   mounts mean no restart is needed — the container reads the file fresh
+   on its next call):
+   ```bash
+   scp credentials/gdrive-token.json credentials/youtube-token.json root@<box-ip>:/www/apps/mentahanpov/credentials/
+   ssh root@<box-ip> 'docker exec mentahanpov-mentahanpov-bot-1 python -c "
+   from core import gdrive
+   print(gdrive.resolve_category_folder_id(\"01 - Suasana Jalan & Perjalanan\"))
+   "'
+   ```
+   A folder ID back (not a traceback) means it worked.
+
+## Status monitoring
+
+Added 2026-08-20, directly in response to the incidents above repeatedly
+only surfacing as a failed run instead of something checkable ahead of
+time. All three surfaces below share `core/health.py` — one place that
+knows what "healthy" means per integration, so they can't drift out of
+sync with each other.
+
+- **Telegram `/status`** — on-demand check of Google Drive, YouTube,
+  Facebook/Instagram, Threads, both configured Gemini models, and disk
+  space. Works whether or not `TELEGRAM_ALLOWED_USER_IDS` is set.
+- **Daily Telegram report** — the same check, sent automatically every
+  day at `DAILY_STATUS_HOUR` (default 8 WIB) to everyone in
+  `TELEGRAM_ALLOWED_USER_IDS`. Skipped if that list is empty — there's
+  nowhere to send it.
+- **`dashboard.py`** (docker-compose service `dashboard`) — the same
+  check as a web page at `http://<box-ip>:${DASHBOARD_PORT:-8090}`,
+  password-protected (`DASHBOARD_USER`/`DASHBOARD_PASSWORD`). LAN-only by
+  design — not port-forwarded to the internet, since a home-network
+  threat model doesn't need that and it avoids having to reason about
+  brute-force protection on a Basic Auth page over plain HTTP.
+
+None of the three ever display actual token/credential values — only
+ok/warning/error plus a short reason — so exposing the dashboard on the
+LAN carries no more risk than exposing "which service is down" would.
+
+Google Drive/YouTube checks can only report "works right now" vs
+"broken right now" — Google doesn't expose a days-until-expiry API for
+Testing-mode refresh tokens, so there's no way to give those the same
+"expires in N days" countdown Facebook/Instagram/Threads get (Meta's
+Graph API `debug_token` endpoint actually reports real expiry). A daily
+check still catches a dead Google token within 24 hours instead of only
+whenever the next real video happens to be sent — a real improvement,
+just not a precise warning window.

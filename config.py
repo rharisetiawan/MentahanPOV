@@ -199,5 +199,29 @@ class Config:
         default_factory=lambda: Path(_env("STATE_FILE", "./state/posts.json"))
     )
 
+    # Status dashboard (dashboard.py) + Telegram /status and the daily
+    # health-check job (see telegram_bot.py). Read-only — never displays
+    # actual credential values, only ok/expiring/broken per integration.
+    dashboard_user: str = field(
+        default_factory=lambda: _env("DASHBOARD_USER", "admin")
+    )
+    dashboard_password: str = field(
+        default_factory=lambda: _env("DASHBOARD_PASSWORD")
+    )
+    dashboard_port: int = field(
+        default_factory=lambda: int(_env("DASHBOARD_PORT", "8090"))
+    )
+    # Meta/Threads tokens are flagged in /status and the dashboard once
+    # they're within this many days of their real expiry (queried live via
+    # Graph API's debug_token — Meta actually tells us, unlike Google).
+    token_warn_days: int = field(
+        default_factory=lambda: int(_env("TOKEN_WARN_DAYS", "7"))
+    )
+    # Hour (0-23, server local time) the daily Telegram status report goes
+    # out. See telegram_bot.py's job_queue.run_daily.
+    daily_status_hour: int = field(
+        default_factory=lambda: int(_env("DAILY_STATUS_HOUR", "8"))
+    )
+
 
 config = Config()

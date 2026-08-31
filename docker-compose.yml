@@ -34,5 +34,23 @@ services:
       - ./incoming:/app/incoming
       - telegram-bot-api-data:/var/lib/telegram-bot-api
 
+  # Read-only status page — see core/health.py + DEPLOYMENT.md. LAN-only:
+  # bound to the host's own network, not forwarded to the internet.
+  # Reachable at http://<box-ip>:${DASHBOARD_PORT:-8090} from any device
+  # on the same WiFi.
+  dashboard:
+    build: .
+    command: python dashboard.py
+    restart: unless-stopped
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+    env_file:
+      - .env
+    ports:
+      - "${DASHBOARD_PORT:-8090}:${DASHBOARD_PORT:-8090}"
+    volumes:
+      - ./credentials:/app/credentials:ro
+      - ./state:/app/state:ro
+
 volumes:
   telegram-bot-api-data:

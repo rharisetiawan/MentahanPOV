@@ -21,6 +21,7 @@ video file ─► ffprobe facts ─► reverse geocode ─► Gemini SOP V3 (JSO
 mentahanpov/
 ├── main.py                  # CLI entry point
 ├── telegram_bot.py          # optional Telegram front-end, runs main.py per video
+├── dashboard.py             # read-only status web page — see DEPLOYMENT.md
 ├── config.py                # env loader + typed config
 ├── core/
 │   ├── video_facts.py       # ffprobe: date, duration, resolution, GPS
@@ -29,6 +30,7 @@ mentahanpov/
 │   ├── google_auth.py       # shared OAuth2 flow (used by gdrive.py + distributors/youtube.py)
 │   ├── gemini.py            # SOP V3 caption/filename/folder generator (JSON)
 │   ├── watermark.py         # master -> watermarked posting copy + story cut
+│   ├── health.py            # integration health checks — backs /status + dashboard.py
 │   └── state.py             # idempotent JSON state log
 ├── assets/                  # watermark-logo.png lives here (auto-placeholder if missing)
 ├── distributors/

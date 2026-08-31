@@ -17,7 +17,13 @@ google-genai>=0.3.0
 playwright>=1.42.0
 
 # Telegram bot front-end (telegram_bot.py)
-python-telegram-bot>=21.0
+# [job-queue] extra pulls in APScheduler, needed for the daily /status
+# report (telegram_bot.py's daily_status_job via job_queue.run_daily).
+python-telegram-bot[job-queue]>=21.0
+tzdata  # zoneinfo needs this on images without an OS tz database (python:slim)
+
+# Status dashboard (dashboard.py) + Telegram /status (core/health.py)
+flask>=3.0.0
 
 # Dev / lint (optional)
 ruff>=0.4.0
