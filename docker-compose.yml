@@ -14,6 +14,13 @@ services:
 
   mentahanpov-bot:
     build: .
+    # Named explicitly so `dashboard` below can reuse this exact image
+    # instead of building its own — same Dockerfile, same context, same
+    # code, only the command differs. Building it twice used to produce
+    # two full copies of the unpacked image (ffmpeg + playwright + all of
+    # requirements.txt), which is what ran this box's small /www
+    # partition out of space. One build now serves both.
+    image: mentahanpov-app:latest
     restart: unless-stopped
     # This box's IPv6 route is broken (has AAAA records, no actual path —
     # connects fail with "Network is unreachable"), which intermittently
@@ -39,7 +46,7 @@ services:
   # Reachable at http://<box-ip>:${DASHBOARD_PORT:-8090} from any device
   # on the same WiFi.
   dashboard:
-    build: .
+    image: mentahanpov-app:latest
     command: python dashboard.py
     restart: unless-stopped
     sysctls:
