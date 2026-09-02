@@ -139,7 +139,8 @@ class Config:
         default_factory=lambda: _env("THREADS_API_VERSION", "v1.0")
     )
 
-    # TikTok
+    # TikTok — local Playwright (distributors/tiktok.py), for runs started
+    # by hand on a desktop that actually has Chromium available.
     tiktok_storage_state: Path = field(
         default_factory=lambda: Path(
             _env("TIKTOK_STORAGE_STATE", "./credentials/tiktok-storage.json")
@@ -147,6 +148,25 @@ class Config:
     )
     tiktok_headless: bool = field(
         default_factory=lambda: _env("TIKTOK_HEADLESS", "false").lower() == "true"
+    )
+
+    # TikTok — remote worker (distributors/tiktok_remote.py), for
+    # bot-triggered runs on hardware that can't run Playwright itself (see
+    # DEPLOYMENT.md -> "TikTok remote worker"). Hands the job to a separate
+    # machine over a shared Telegram group rather than a direct network
+    # connection, since the two boxes are never on the same LAN and
+    # exposing a port between them isn't an option here.
+    tiktok_worker_group_chat_id: int = field(
+        default_factory=lambda: int(_env("TIKTOK_WORKER_GROUP_CHAT_ID", "0"))
+    )
+    # The worker bot's own token — only used by worker_service.py (which
+    # runs on the *other* machine), not by this box's own pipeline. Listed
+    # here anyway so both sides read it from the same env var name.
+    tiktok_worker_bot_token: str = field(
+        default_factory=lambda: _env("TIKTOK_WORKER_BOT_TOKEN")
+    )
+    tiktok_remote_timeout_s: int = field(
+        default_factory=lambda: int(_env("TIKTOK_REMOTE_TIMEOUT_S", "600"))
     )
 
     # Telegram bot front-end (see telegram_bot.py)

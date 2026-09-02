@@ -27,6 +27,7 @@ from distributors import (
     instagram_story,
     threads,
     tiktok,
+    tiktok_remote,
     youtube,
 )
 
@@ -38,14 +39,22 @@ PLATFORM_REGISTRY: dict[str, Callable[..., dict[str, str]]] = {
     "facebook": facebook.post,
     "instagram": instagram.post,
     "threads": threads.post,
-    "tiktok": tiktok.post,
+    # Hardware that can run Playwright itself (a desktop with Chromium)
+    # posts directly; hardware that can't (the HG680) hands the job to a
+    # separate machine over Telegram instead — see
+    # distributors/tiktok_remote.py's docstring. Which one runs here is
+    # decided by whether TIKTOK_WORKER_GROUP_CHAT_ID is configured, not by
+    # a separate flag, so switching machines is a one-line .env change.
+    "tiktok": tiktok_remote.post if config.tiktok_worker_group_chat_id else tiktok.post,
     "facebook_story": facebook_story.post,
     "instagram_story": instagram_story.post,
 }
 
 # Platforms that publish by handing a URL to the platform instead of
 # uploading bytes — these force an upload of the watermarked copy.
-NEEDS_POST_URL = {"instagram", "threads"}
+NEEDS_POST_URL = {"instagram", "threads"} | (
+    {"tiktok"} if config.tiktok_worker_group_chat_id else set()
+)
 NEEDS_STORY_URL = {"instagram_story"}
 STORY_PLATFORMS = {"facebook_story", "instagram_story"}
 

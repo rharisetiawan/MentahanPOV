@@ -233,3 +233,102 @@ Graph API `debug_token` endpoint actually reports real expiry). A daily
 check still catches a dead Google token within 24 hours instead of only
 whenever the next real video happens to be sent — a real improvement,
 just not a precise warning window.
+
+## TikTok remote worker
+
+Added 2026-09-02. The HG680P is an ARM board with limited RAM — it can't
+run Playwright/Chromium (the only working TikTok posting method; TikTok's
+official Content Posting API needs an app-review approval that can take
+weeks). Rather than skip TikTok entirely, posting is delegated to a
+second, more capable machine (the campus server, x86, more RAM) over a
+channel both boxes can already reach even though they're never on the
+same network and neither exposes a port to the internet: the Telegram
+Bot API.
+
+**Why not full mirroring / full auto-failover.** Two options were
+considered and rejected in favor of this "middle ground":
+1. Running the entire pipeline twice (once per box) — doubles Google
+   Drive/YouTube/Gemini API usage and posting-account risk for no
+   benefit, since only the TikTok step actually needs the second
+   machine.
+2. Automatic failover (campus server takes over the *whole* pipeline if
+   the HG680 goes down) — real value, but meaningfully more complex
+   (health checks between boxes, split-brain avoidance, state
+   synchronization) for a problem that hasn't actually happened yet.
+
+Splitting off just the TikTok step keeps each box doing what it's
+actually suited for, with no new failure modes for the four platforms
+that already work fine on the HG680.
+
+**Architecture.**
+
+```
+HG680 (main.py)                Telegram                Campus server
+──────────────────         "MentahanPOV Jobs"          ───────────────
+distributors/                  group chat                worker_service.py
+tiktok_remote.py  ──sendMessage──▶  (both bots  ◀──getUpdates── (polls with
+  sends:                            are members,          TIKTOK_WORKER_
+  "TIKTOK_JOB <id>                  Group Privacy         BOT_TOKEN)
+   <video_url>                      OFF for both)
+   <caption>"                                             on TIKTOK_JOB:
+  via main bot's                                          downloads video,
+  TELEGRAM_BOT_TOKEN                                      runs distributors/
+                                                           tiktok.py Playwright
+telegram_bot.py's                                         flow UNCHANGED,
+handle_tiktok_job_                ◀──sendMessage───────── replies
+result() writes the                "TIKTOK_DONE <id> <url>"
+reply to                           or "TIKTOK_FAILED <id> <err>"
+state/tiktok_jobs/<id>.json        via worker bot's own token
+
+tiktok_remote.py polls that
+file (not Telegram) until it
+appears or TIKTOK_REMOTE_
+TIMEOUT_S elapses
+```
+
+Two separate bot tokens, not one, because a single Telegram bot token can
+only be long-polled (`getUpdates`) by one process at a time — the HG680's
+`telegram_bot.py` already owns that stream for the main bot, so the
+worker needs its own bot to poll independently. `tiktok_remote.py` itself
+never polls anything; it only ever calls `sendMessage` and then watches a
+local file, so it can't collide with `telegram_bot.py`'s own poller
+either.
+
+`main.py` picks the local-Playwright path or this remote one for
+`PLATFORM_REGISTRY["tiktok"]` automatically, based on whether
+`TIKTOK_WORKER_GROUP_CHAT_ID` is set — no separate flag to remember.
+
+**One-time setup.**
+
+1. Create a second bot via @BotFather (`/newbot`) — this project used
+   `@MentahanPOV_TikTok_bot`. Save its token as `TIKTOK_WORKER_BOT_TOKEN`.
+2. Create a Telegram group (any name — this project used "MentahanPOV
+   Jobs") and add BOTH the main bot and the new worker bot to it.
+3. For the worker bot specifically: BotFather -> `/mybots` -> select the
+   worker bot -> Bot Settings -> Group Privacy -> **Turn off**. Without
+   this, the bot only receives messages that literally mention it, and
+   would never see the main bot's `TIKTOK_JOB` messages.
+4. Find the group's numeric `chat_id`: send any message in the group,
+   then `curl "https://api.telegram.org/bot<WORKER_TOKEN>/getUpdates"`
+   and read `message.chat.id` (negative number for groups). Set as
+   `TIKTOK_WORKER_GROUP_CHAT_ID` in `.env` on **both** boxes.
+5. On the campus server: clone this repo, then
+   ```bash
+   pip install -r requirements-worker.txt
+   playwright install --with-deps chromium
+   python -m distributors.tiktok login   # headed browser, log in once
+   ```
+   The resulting `credentials/tiktok-storage.json` only needs to exist
+   on the campus server — the HG680 never touches Playwright at all once
+   this is set up.
+6. Run `python worker_service.py` continuously on the campus server
+   (systemd unit, `tmux`/`screen`, or a Docker container — pick whatever
+   matches how the rest of that box's services are already run).
+7. Add `tiktok` to `PLATFORMS` (or `TELEGRAM_PLATFORMS`) on the HG680
+   once the above is confirmed working end-to-end with a real video.
+
+**Recovering a stuck job.** If `tiktok_remote.post()` times out
+(`TIKTOK_REMOTE_TIMEOUT_S`, default 600s), the worker may still be
+mid-upload — check the "MentahanPOV Jobs" group for a late
+`TIKTOK_DONE`/`TIKTOK_FAILED` reply, or `worker_service.py`'s own log
+output on the campus server, before assuming it's lost.
