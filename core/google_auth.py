@@ -10,11 +10,14 @@ in sync automatically.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
+
+log = logging.getLogger(__name__)
 
 
 def get_credentials(
@@ -51,6 +54,20 @@ def get_credentials(
             port=0, prompt="select_account", open_browser=False
         )
 
-    token_path.parent.mkdir(parents=True, exist_ok=True)
-    token_path.write_text(creds.to_json(), encoding="utf-8")
+    # A freshly-refreshed access token is only worth caching if this
+    # process can actually write it back — dashboard.py and core/health.py
+    # deliberately mount credentials/ read-only (they're read-only status
+    # viewers, not credential managers), so failing to persist here is
+    # expected there, not a real problem: the creds object in hand is
+    # still valid for this call, and the container that owns write access
+    # will cache its own refresh normally on its next real use.
+    try:
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text(creds.to_json(), encoding="utf-8")
+    except OSError:
+        log.warning(
+            "[google_auth] couldn't cache refreshed token to %s (read-only mount?); "
+            "using it for this call without persisting it",
+            token_path,
+        )
     return creds
