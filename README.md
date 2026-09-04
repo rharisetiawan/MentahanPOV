@@ -22,6 +22,8 @@ mentahanpov/
 ├── main.py                  # CLI entry point
 ├── telegram_bot.py          # optional Telegram front-end, runs main.py per video
 ├── dashboard.py             # read-only status web page — see DEPLOYMENT.md
+├── admin.py                 # read-write admin dashboard (edit .env/creds, control the bot) — DEPLOYMENT.md
+├── admin/                   # Flask app behind admin.py — schema-driven from .env.example
 ├── config.py                # env loader + typed config
 ├── core/
 │   ├── video_facts.py       # ffprobe: date, duration, resolution, GPS

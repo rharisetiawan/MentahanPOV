@@ -234,6 +234,69 @@ check still catches a dead Google token within 24 hours instead of only
 whenever the next real video happens to be sent — a real improvement,
 just not a precise warning window.
 
+## Admin dashboard
+
+Added 2026-09-04 — `dashboard.py` above is deliberately read-only, so
+rotating a token or fixing a broken credential still meant SSH + a text
+editor. `admin.py` is the read-write sibling: edit every `.env` value,
+upload/replace/delete the credential files, and start/stop/apply the bot
+from a browser.
+
+**Why it's not just another docker-compose service** — `dashboard.py`'s
+container is intentionally sandboxed (`credentials/`/`state/` mounted
+`:ro`, no `.env` file inside the container, no Docker socket) specifically
+so a compromised or buggy read-only page can't touch anything. Giving
+that same container write access plus a Docker socket to support editing
+would mean either undoing that sandboxing or building a second, riskier
+container — both worse than just running a second small process. So
+`admin.py` runs directly on the host instead:
+
+```bash
+cd /www/apps/mentahanpov
+python3 -m venv .venv-admin
+.venv-admin/bin/pip install flask python-dotenv
+```
+
+Then as a systemd unit (`/etc/systemd/system/mentahanpov-admin.service`):
+
+```ini
+[Unit]
+Description=MentahanPOV admin dashboard
+After=network.target docker.service
+
+[Service]
+WorkingDirectory=/www/apps/mentahanpov
+ExecStart=/www/apps/mentahanpov/.venv-admin/bin/python admin.py
+Restart=on-failure
+User=songolekor
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now mentahanpov-admin
+```
+
+`songolekor` needs to be in the `docker` group (`sudo usermod -aG docker
+songolekor`, then re-login) since `admin.py` shells out to `docker
+compose` for bot start/stop/apply and for triggering a manual run
+(`docker compose run --rm mentahanpov-bot python main.py ...` — same
+image, deps, and mounted credentials as the real bot, no second Python
+environment needed for the heavy stuff).
+
+Reachable at `http://<box-ip>:${ADMIN_PORT:-8091}`, same
+`DASHBOARD_USER`/`DASHBOARD_PASSWORD` Basic Auth as the read-only
+dashboard. **Unlike that one, this page can rewrite every credential the
+pipeline uses** — treat its URL like a root password. LAN/Tailscale-only,
+same as the status dashboard; don't port-forward it to the internet.
+
+Saving `.env` here only rewrites the file — it does **not** restart
+anything (`docker compose up -d` recreates whichever service's config
+changed, and `env_file` is only read at container *creation*). The Bot
+tab has a "Terapkan" button that runs exactly that.
+
 ## TikTok remote worker
 
 Added 2026-09-02. The HG680P is an ARM board with limited RAM — it can't

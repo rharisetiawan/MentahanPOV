@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Config — MentahanPOV Dashboard{% endblock %}
+{% block content %}
+<p class="muted">
+  Ini isi <code>.env</code> kamu. Token/API key disembunyikan secara default —
+  klik 👁 buat lihat. Simpan akan menulis ulang <code>.env</code> (backup
+  otomatis ke <code>.env.bak</code>). File token JSON (OAuth, TikTok cookies)
+  diatur di tab <a href="{{ url_for('credentials_page') }}">Credentials</a>.
+</p>
+<form method="post">
+  {% for section in sections %}
+  <div class="card">
+    <h2>{{ section.title }}</h2>
+    {% for f in section.fields %}
+    <div class="field">
+      <label for="{{ f.key }}">{{ f.key }}</label>
+      {% if f.kind == "bool" %}
+        <div class="checkbox-row">
+          <input type="checkbox" id="{{ f.key }}" name="{{ f.key }}" value="true"
+                 {{ "checked" if values.get(f.key, f.default)|lower == "true" }}>
+          <label for="{{ f.key }}" style="font-weight:normal;margin:0">aktif</label>
+        </div>
+      {% elif f.kind == "secret" %}
+        <div class="secret-row">
+          <input type="password" id="{{ f.key }}" name="{{ f.key }}"
+                 value="{{ values.get(f.key, f.default) }}" autocomplete="off">
+          <button type="button" class="secondary small toggle-secret" data-target="{{ f.key }}">👁</button>
+        </div>
+      {% else %}
+        <input type="text" id="{{ f.key }}" name="{{ f.key }}"
+               value="{{ values.get(f.key, f.default) }}" autocomplete="off">
+      {% endif %}
+      {% if f.comment %}<div class="help">{{ f.comment }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+  <div class="actions">
+    <button type="submit">Simpan .env</button>
+  </div>
+</form>
+
+<script>
+document.querySelectorAll(".toggle-secret").forEach(function (btn) {
+  btn.addEventListener("click", function () {
+    var input = document.getElementById(btn.dataset.target);
+    input.type = input.type === "password" ? "text" : "password";
+  });
+});
+</script>
+{% endblock %}

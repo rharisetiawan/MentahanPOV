@@ -40,6 +40,7 @@ bot-specific concerns (timeouts, status messages, Telegram file handling).
 | `core/state.py` | The only code that reads/writes `state/posts.json`. Atomic writes (`.tmp` + `replace`). |
 | `distributors/*.py` | One file per publish target — see below. |
 | `distributors/meta_graph.py` | Graph API URL-building + Instagram container polling, shared by every FB/IG distributor. |
+| `admin/` | Read-write admin dashboard (`python admin.py`) for `.env`/credential editing and `docker compose`-driven bot/run control — see DEPLOYMENT.md → "Admin dashboard". `admin/env_schema.py` parses `.env.example` at request time instead of hardcoding field names, so the form always matches whatever's actually in `.env.example`. Runs as a separate host process from `dashboard.py` (which stays read-only and containerized) — it needs write access and `docker compose`, neither of which that sandboxed container has on purpose. |
 
 ## The distributor contract
 

@@ -243,5 +243,14 @@ class Config:
         default_factory=lambda: int(_env("DAILY_STATUS_HOUR", "8"))
     )
 
+    # Admin dashboard (admin.py) — the read-write sibling of dashboard.py
+    # above: edits .env/credentials and drives docker compose. Runs as its
+    # own host process (not in the mentahanpov-app image — it needs to
+    # write files the read-only container's mounts deliberately can't,
+    # and to shell out to `docker compose`), on its own port so it never
+    # collides with the read-only dashboard. Reuses DASHBOARD_USER/
+    # DASHBOARD_PASSWORD above rather than a second credential.
+    admin_port: int = field(default_factory=lambda: int(_env("ADMIN_PORT", "8091")))
+
 
 config = Config()

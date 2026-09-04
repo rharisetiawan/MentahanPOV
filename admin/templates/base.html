@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}MentahanPOV Dashboard{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">Mentahan<span>POV</span> · Admin</div>
+  <nav class="tabs">
+    <a href="{{ url_for('config_page') }}" class="{{ 'active' if request.endpoint == 'config_page' }}">Config</a>
+    <a href="{{ url_for('credentials_page') }}" class="{{ 'active' if request.endpoint == 'credentials_page' }}">Credentials</a>
+    <a href="{{ url_for('status_page') }}" class="{{ 'active' if request.endpoint == 'status_page' }}">Status</a>
+    <a href="{{ url_for('bot_page') }}" class="{{ 'active' if request.endpoint == 'bot_page' }}">Bot</a>
+    <a href="{{ url_for('run_page') }}" class="{{ 'active' if request.endpoint == 'run_page' }}">Run</a>
+  </nav>
+</header>
+<main>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="flash {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

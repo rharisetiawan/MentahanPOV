@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Run — MentahanPOV Dashboard{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Jalankan pipeline <span id="status-badge" class="badge {{ 'running' if status.running else 'stopped' }}">{{ 'running' if status.running else 'stopped' }}</span></h2>
+  <form method="post" action="{{ url_for('run_start') }}" enctype="multipart/form-data">
+    <div class="field">
+      <label>Upload video</label>
+      <input type="file" name="video" accept="video/*">
+      <div class="help">atau isi nama file yang sudah ada di incoming/ (bukan path lengkap):</div>
+      <input type="text" name="video_path" placeholder="clip01.mp4">
+    </div>
+    <div class="field">
+      <label>Platforms (kosongkan = default PLATFORMS di .env)</label>
+      {% for p in platforms %}
+      <div class="checkbox-row">
+        <input type="checkbox" id="p-{{ p }}" name="platforms" value="{{ p }}" {{ "checked" if p in default_platforms }}>
+        <label for="p-{{ p }}" style="font-weight:normal;margin:0">{{ p }}</label>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="field">
+      <label>Flags</label>
+      <div class="checkbox-row"><input type="checkbox" id="dry_run" name="dry_run"><label for="dry_run" style="font-weight:normal;margin:0">--dry-run (gdrive + gemini saja, skip posting)</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="skip_gdrive" name="skip_gdrive"><label for="skip_gdrive" style="font-weight:normal;margin:0">--skip-gdrive</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="skip_gemini" name="skip_gemini"><label for="skip_gemini" style="font-weight:normal;margin:0">--skip-gemini</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="skip_watermark" name="skip_watermark"><label for="skip_watermark" style="font-weight:normal;margin:0">--skip-watermark</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="force" name="force"><label for="force" style="font-weight:normal;margin:0">--force (repost meski sudah pernah sukses)</label></div>
+    </div>
+    <div class="actions">
+      <button type="submit" id="start-btn" {{ 'disabled' if status.running }}>Jalankan</button>
+    </div>
+  </form>
+  <form method="post" action="{{ url_for('run_stop') }}" style="margin-top:0.6rem">
+    <button type="submit" id="stop-btn" class="danger" {{ 'disabled' if not status.running }}>Stop</button>
+  </form>
+</div>
+<div class="card">
+  <h2>Log</h2>
+  <pre class="log" id="log">{{ status.log }}</pre>
+</div>
+<script>
+function poll() {
+  fetch("{{ url_for('run_log_json') }}").then(function (r) { return r.json(); }).then(function (data) {
+    var pre = document.getElementById("log");
+    var atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+    pre.textContent = data.log;
+    if (atBottom) pre.scrollTop = pre.scrollHeight;
+    var badge = document.getElementById("status-badge");
+    badge.textContent = data.running ? "running" : "stopped";
+    badge.className = "badge " + (data.running ? "running" : "stopped");
+    document.getElementById("start-btn").disabled = data.running;
+    document.getElementById("stop-btn").disabled = !data.running;
+  }).catch(function () {});
+}
+setInterval(poll, 3000);
+</script>
+{% endblock %}
