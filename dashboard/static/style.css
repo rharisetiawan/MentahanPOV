@@ -1,0 +1,178 @@
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --panel-2: #1e222b;
+  --border: #2a2f3a;
+  --text: #e6e8ec;
+  --muted: #8a90a0;
+  --accent: #5b8cff;
+  --ok: #3ecf8e;
+  --err: #ff6b6b;
+  --warn: #f5b942;
+  font-size: 15px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+header.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.9rem 1.5rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+header.topbar .brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+header.topbar .brand span { color: var(--accent); }
+
+nav.tabs {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+nav.tabs a {
+  color: var(--muted);
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  font-size: 0.92rem;
+}
+nav.tabs a.active, nav.tabs a:hover {
+  background: var(--panel-2);
+  color: var(--text);
+  text-decoration: none;
+}
+
+main {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.card h2 {
+  margin-top: 0;
+  font-size: 1.05rem;
+  color: var(--text);
+}
+
+.field {
+  margin-bottom: 1rem;
+}
+.field label {
+  display: block;
+  font-weight: 600;
+  font-size: 0.88rem;
+  margin-bottom: 0.25rem;
+}
+.field .help {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-top: 0.25rem;
+}
+.field input[type=text],
+.field input[type=password],
+.field input[type=file],
+.field input[type=number] {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88rem;
+}
+.field input:focus { outline: 1px solid var(--accent); }
+
+.secret-row { display: flex; gap: 0.4rem; }
+.secret-row input { flex: 1; }
+.secret-row button {
+  flex: none;
+}
+
+.checkbox-row { display: flex; align-items: center; gap: 0.5rem; }
+.checkbox-row input { width: auto; }
+
+button, .btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 0.55rem 1.1rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+button:hover, .btn:hover { filter: brightness(1.1); text-decoration: none; }
+button.secondary, .btn.secondary {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+button.danger, .btn.danger { background: var(--err); }
+button.small { padding: 0.35rem 0.6rem; font-size: 0.8rem; }
+
+.flash {
+  padding: 0.7rem 1rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+.flash.success { background: rgba(62,207,142,0.12); color: var(--ok); border: 1px solid var(--ok); }
+.flash.error { background: rgba(255,107,107,0.12); color: var(--err); border: 1px solid var(--err); }
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.badge.ok { background: rgba(62,207,142,0.15); color: var(--ok); }
+.badge.error { background: rgba(255,107,107,0.15); color: var(--err); }
+.badge.pending { background: rgba(245,185,66,0.15); color: var(--warn); }
+.badge.running { background: rgba(91,140,255,0.15); color: var(--accent); }
+.badge.stopped { background: var(--panel-2); color: var(--muted); }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+
+pre.log {
+  background: #05060a;
+  color: #c9d1d9;
+  border-radius: 8px;
+  padding: 1rem;
+  max-height: 420px;
+  overflow-y: auto;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.muted { color: var(--muted); font-size: 0.85rem; }
+.section-title { margin-top: 2rem; margin-bottom: 0.5rem; color: var(--muted); text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.06em; }
+.actions { display: flex; gap: 0.6rem; margin-top: 1rem; }
+.login-box { max-width: 340px; margin: 4rem auto; }

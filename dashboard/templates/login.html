@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Login — MentahanPOV Dashboard{% endblock %}
+{% block content %}
+<div class="card login-box">
+  <h2>Masuk Dashboard</h2>
+  <form method="post">
+    <div class="field">
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autofocus>
+    </div>
+    <button type="submit">Masuk</button>
+  </form>
+</div>
+{% endblock %}
