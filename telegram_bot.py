@@ -25,7 +25,6 @@ import ast
 import asyncio
 import datetime
 import html
-import json
 import logging
 import re
 import sys
@@ -57,11 +56,6 @@ log = logging.getLogger("mentahanpov.bot")
 REPO_ROOT = Path(__file__).parent
 INCOMING_DIR = REPO_ROOT / "incoming"
 RUN_LOG_DIR = REPO_ROOT / "state" / "run_logs"
-TIKTOK_JOBS_DIR = REPO_ROOT / "state" / "tiktok_jobs"
-# Matches worker_service.py's reply on the remote box, e.g.
-# "TIKTOK_DONE ab12cd34ef56 https://www.tiktok.com/@x/video/123" or
-# "TIKTOK_FAILED ab12cd34ef56 login session expired".
-_TIKTOK_RESULT_RE = re.compile(r"^TIKTOK_(DONE|FAILED)\s+(\S+)(?:\s+([\s\S]+))?$")
 # The HG680P is a weak ARM board: watermark rendering, the HD master
 # upload, and five sequential platform posts have measured close to 15
 # minutes end to end on it. That used to be the timeout itself, so a
@@ -498,31 +492,6 @@ async def daily_status_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             log.exception("[bot] failed to send daily status to %s", user_id)
 
 
-async def handle_tiktok_job_result(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Catch the worker box's TIKTOK_DONE/TIKTOK_FAILED reply in the shared
-    "MentahanPOV Jobs" group and drop it on disk for
-    distributors/tiktok_remote.py (running in a separate `main.py`
-    process) to pick up by polling the file — see that module's docstring
-    for why the handoff goes through a file instead of directly here.
-    """
-    if update.message is None or not update.message.text:
-        return
-    match = _TIKTOK_RESULT_RE.match(update.message.text.strip())
-    if not match:
-        return
-    status, job_id, detail = match.groups()
-    TIKTOK_JOBS_DIR.mkdir(parents=True, exist_ok=True)
-    result = (
-        {"status": "ok", "url": detail or ""}
-        if status == "DONE"
-        else {"status": "error", "error": detail or "unknown error"}
-    )
-    (TIKTOK_JOBS_DIR / f"{job_id}.json").write_text(
-        json.dumps(result), encoding="utf-8"
-    )
-    log.info("[bot] recorded TikTok worker result for job %s: %s", job_id, status)
-
-
 async def handle_other(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
@@ -607,15 +576,6 @@ def main() -> None:
     app.add_handler(
         MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video)
     )
-    if config.tiktok_worker_group_chat_id:
-        app.add_handler(
-            MessageHandler(
-                filters.Chat(chat_id=config.tiktok_worker_group_chat_id)
-                & filters.TEXT
-                & filters.Regex(_TIKTOK_RESULT_RE),
-                handle_tiktok_job_result,
-            )
-        )
     app.add_handler(MessageHandler(filters.ALL, handle_other))
     app.add_error_handler(handle_error)
 

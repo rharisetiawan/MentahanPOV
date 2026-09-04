@@ -268,7 +268,10 @@ After=network.target docker.service
 WorkingDirectory=/www/apps/mentahanpov
 ExecStart=/www/apps/mentahanpov/.venv-admin/bin/python admin.py
 Restart=on-failure
-User=songolekor
+# Root, not the deploy user: /www/apps/mentahanpov (.env, credentials/)
+# is root-owned like the rest of this deployment, and the Config/
+# Credentials tabs need write access to it.
+User=root
 
 [Install]
 WantedBy=multi-user.target
@@ -279,12 +282,12 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now mentahanpov-admin
 ```
 
-`songolekor` needs to be in the `docker` group (`sudo usermod -aG docker
-songolekor`, then re-login) since `admin.py` shells out to `docker
-compose` for bot start/stop/apply and for triggering a manual run
-(`docker compose run --rm mentahanpov-bot python main.py ...` — same
-image, deps, and mounted credentials as the real bot, no second Python
-environment needed for the heavy stuff).
+`admin.py` shells out to `docker compose` for bot start/stop/apply and
+for triggering a manual run (`docker compose run --rm mentahanpov-bot
+python main.py ...` — same image, deps, and mounted credentials as the
+real bot, no second Python environment needed for the heavy stuff);
+running the unit as root sidesteps needing the deploy user in the
+`docker` group just for this.
 
 Reachable at `http://<box-ip>:${ADMIN_PORT:-8091}`, same
 `DASHBOARD_USER`/`DASHBOARD_PASSWORD` Basic Auth as the read-only
@@ -299,14 +302,12 @@ tab has a "Terapkan" button that runs exactly that.
 
 ## TikTok remote worker
 
-Added 2026-09-02. The HG680P is an ARM board with limited RAM — it can't
-run Playwright/Chromium (the only working TikTok posting method; TikTok's
-official Content Posting API needs an app-review approval that can take
-weeks). Rather than skip TikTok entirely, posting is delegated to a
-second, more capable machine (the campus server, x86, more RAM) over a
-channel both boxes can already reach even though they're never on the
-same network and neither exposes a port to the internet: the Telegram
-Bot API.
+Added 2026-09-02, redesigned 2026-09-04. The HG680P is an ARM board with
+limited RAM — it can't run Playwright/Chromium (the only working TikTok
+posting method; TikTok's official Content Posting API needs an
+app-review approval that can take weeks). Rather than skip TikTok
+entirely, posting is delegated to a second, more capable machine (the
+campus server, x86, more RAM).
 
 **Why not full mirroring / full auto-failover.** Two options were
 considered and rejected in favor of this "middle ground":
@@ -323,59 +324,89 @@ Splitting off just the TikTok step keeps each box doing what it's
 actually suited for, with no new failure modes for the four platforms
 that already work fine on the HG680.
 
-**Architecture.**
+### The Telegram-relay version never actually worked
+
+The original design (2026-09-02) hands the job off through a shared
+"MentahanPOV Jobs" Telegram group: the main bot posts `TIKTOK_JOB <id>
+<url> <caption>` into the group, and a second, dedicated worker bot
+long-polls that same group for it.
+
+**This never worked, in either direction.** Telegram bots silently do
+not receive `message` updates for messages sent by *other bots* — this
+is a platform-level restriction (anti bot-loop), independent of Group
+Privacy, chat membership, or anything either bot's code does. Confirmed
+2026-09-04 by direct testing: `getUpdates` on the worker bot's own token
+returned nothing for a `TIKTOK_JOB` message posted by the main bot into
+a group both bots were confirmed to be members of (`getChat` succeeded,
+`getMe.can_read_all_group_messages: true`), yet the *exact same text*,
+typed by a human directly into the group, was picked up by the worker
+immediately. The 2026-09-02 setup's own "verification" step had used a
+manually-typed human test message, which is why it looked like it
+worked — it tested the wrong thing.
+
+Since replies would have gone through the same mechanism in the opposite
+direction, `TIKTOK_DONE`/`TIKTOK_FAILED` replies from the worker bot back
+to the main bot's chat were equally undeliverable. Every TikTok post
+attempted through this design silently failed after its
+`TIKTOK_REMOTE_TIMEOUT_S` (600s) with no diagnostic beyond "worker didn't
+reply" — because the worker never received the job in the first place,
+not because it was slow or broken.
+
+### Current design: direct HTTP over Tailscale
+
+Both boxes join the same Tailscale (tailscale.com) mesh network, giving
+each a stable private IP reachable from the other without any port
+forwarding or public exposure — replacing the Telegram relay with a
+plain HTTP request:
 
 ```
-HG680 (main.py)                Telegram                Campus server
-──────────────────         "MentahanPOV Jobs"          ───────────────
-distributors/                  group chat                worker_service.py
-tiktok_remote.py  ──sendMessage──▶  (both bots  ◀──getUpdates── (polls with
-  sends:                            are members,          TIKTOK_WORKER_
-  "TIKTOK_JOB <id>                  Group Privacy         BOT_TOKEN)
-   <video_url>                      OFF for both)
-   <caption>"                                             on TIKTOK_JOB:
-  via main bot's                                          downloads video,
-  TELEGRAM_BOT_TOKEN                                      runs distributors/
-                                                           tiktok.py Playwright
-telegram_bot.py's                                         flow UNCHANGED,
-handle_tiktok_job_                ◀──sendMessage───────── replies
-result() writes the                "TIKTOK_DONE <id> <url>"
-reply to                           or "TIKTOK_FAILED <id> <err>"
-state/tiktok_jobs/<id>.json        via worker bot's own token
-
-tiktok_remote.py polls that
-file (not Telegram) until it
-appears or TIKTOK_REMOTE_
-TIMEOUT_S elapses
+HG680 (main.py)                    Tailscale mesh              Campus server
+──────────────────                 (100.x.x.x)                 ───────────────
+distributors/          POST /tiktok-job                        worker_service.py
+tiktok_remote.py  ─────{video_url, caption,──────────────────▶ ThreadingHTTPServer
+  builds the request    secret}                                  on TIKTOK_WORKER_PORT
+  with the watermarked                                            (default 8790)
+  copy's public URL                                             on request:
+  (post_url, same as                                              downloads video,
+  Instagram's flow)                                                runs distributors/
+                                                                    tiktok.py Playwright
+  waits up to                    ◀────{"status": "ok",             flow UNCHANGED,
+  TIKTOK_REMOTE_                       "url": "..."}                responds inline —
+  TIMEOUT_S for the                or {"status": "error",          no separate reply
+  HTTP response                        "error": "..."}}             channel needed
 ```
 
-Two separate bot tokens, not one, because a single Telegram bot token can
-only be long-polled (`getUpdates`) by one process at a time — the HG680's
-`telegram_bot.py` already owns that stream for the main bot, so the
-worker needs its own bot to poll independently. `tiktok_remote.py` itself
-never polls anything; it only ever calls `sendMessage` and then watches a
-local file, so it can't collide with `telegram_bot.py`'s own poller
-either.
-
-`main.py` picks the local-Playwright path or this remote one for
+One request, one response — no polling, no shared group, no second bot
+token. `main.py` picks the local-Playwright path or this remote one for
 `PLATFORM_REGISTRY["tiktok"]` automatically, based on whether
-`TIKTOK_WORKER_GROUP_CHAT_ID` is set — no separate flag to remember.
+`TIKTOK_WORKER_HOST` is set.
 
 **One-time setup.**
 
-1. Create a second bot via @BotFather (`/newbot`) — this project used
-   `@MentahanPOV_TikTok_bot`. Save its token as `TIKTOK_WORKER_BOT_TOKEN`.
-2. Create a Telegram group (any name — this project used "MentahanPOV
-   Jobs") and add BOTH the main bot and the new worker bot to it.
-3. For the worker bot specifically: BotFather -> `/mybots` -> select the
-   worker bot -> Bot Settings -> Group Privacy -> **Turn off**. Without
-   this, the bot only receives messages that literally mention it, and
-   would never see the main bot's `TIKTOK_JOB` messages.
-4. Find the group's numeric `chat_id`: send any message in the group,
-   then `curl "https://api.telegram.org/bot<WORKER_TOKEN>/getUpdates"`
-   and read `message.chat.id` (negative number for groups). Set as
-   `TIKTOK_WORKER_GROUP_CHAT_ID` in `.env` on **both** boxes.
-5. On the campus server: clone this repo, then
+1. Install Tailscale on both boxes and log both into the same tailnet
+   (same Tailscale account). On a box where installing a system package
+   isn't convenient, running it in a container works fine and needs no
+   `sudo`:
+   ```bash
+   docker run -d --name=tailscale --hostname=<name> \
+     -v ~/tailscale-state:/var/lib/tailscale \
+     -v /dev/net/tun:/dev/net/tun \
+     --cap-add=NET_ADMIN --cap-add=NET_RAW --net=host \
+     --restart=unless-stopped tailscale/tailscale tailscaled
+   docker exec <container> tailscale up --hostname=<name>
+   ```
+   The `tailscale up` command prints a `https://login.tailscale.com/a/...`
+   URL — open it and approve. Check `tailscale status` (or the
+   Tailscale admin console) for the resulting IP.
+2. Note the campus server's Tailscale IP (or its MagicDNS name, if
+   enabled) and set on **both** boxes' `.env`:
+   `TIKTOK_WORKER_HOST=<that IP or name>`,
+   `TIKTOK_WORKER_PORT=8790` (or any free port),
+   `TIKTOK_WORKER_SHARED_SECRET=<any random string, same value both
+   sides>` — Tailscale already restricts *who* can reach the port at
+   all; the secret just stops another device on the same tailnet from
+   queuing jobs.
+3. On the campus server: clone this repo, then
    ```bash
    pip install -r requirements-worker.txt
    playwright install --with-deps chromium
@@ -384,14 +415,45 @@ either.
    The resulting `credentials/tiktok-storage.json` only needs to exist
    on the campus server — the HG680 never touches Playwright at all once
    this is set up.
-6. Run `python worker_service.py` continuously on the campus server
-   (systemd unit, `tmux`/`screen`, or a Docker container — pick whatever
-   matches how the rest of that box's services are already run).
-7. Add `tiktok` to `PLATFORMS` (or `TELEGRAM_PLATFORMS`) on the HG680
-   once the above is confirmed working end-to-end with a real video.
+4. Run `worker_service.py` continuously on the campus server as a
+   systemd **user** unit (survives reboots and crashes without needing
+   root):
+   ```bash
+   mkdir -p ~/.config/systemd/user
+   cat > ~/.config/systemd/user/mentahanpov-tiktok-worker.service <<'EOF'
+   [Unit]
+   Description=MentahanPOV TikTok remote worker
+   After=network-online.target
 
-**Recovering a stuck job.** If `tiktok_remote.post()` times out
-(`TIKTOK_REMOTE_TIMEOUT_S`, default 600s), the worker may still be
-mid-upload — check the "MentahanPOV Jobs" group for a late
-`TIKTOK_DONE`/`TIKTOK_FAILED` reply, or `worker_service.py`'s own log
-output on the campus server, before assuming it's lost.
+   [Service]
+   WorkingDirectory=%h/mentahanpov-tiktok
+   ExecStart=/usr/bin/xvfb-run -a %h/mentahanpov-tiktok/.venv/bin/python worker_service.py
+   Restart=always
+   RestartSec=10
+
+   [Install]
+   WantedBy=default.target
+   EOF
+   systemctl --user daemon-reload
+   systemctl --user enable --now mentahanpov-tiktok-worker
+   ```
+   `xvfb-run` gives Playwright's non-headless Chromium a virtual display
+   on a box with no monitor attached — same as the original setup, this
+   part is unchanged. Check status/logs with
+   `systemctl --user status mentahanpov-tiktok-worker` and
+   `journalctl --user -u mentahanpov-tiktok-worker -f`.
+5. Add `tiktok` to `PLATFORMS` (or `TELEGRAM_PLATFORMS`) on the HG680
+   once the above is confirmed working end-to-end with a real video —
+   `curl -X POST http://<worker-tailscale-ip>:8790/tiktok-job -H
+   'Content-Type: application/json' -d
+   '{"video_url":"<any public mp4 url>","caption":"test","secret":"<TIKTOK_WORKER_SHARED_SECRET>"}'`
+   is a quick way to test the worker directly without running the whole
+   pipeline.
+
+**Recovering a stuck job.** Since the worker now responds synchronously
+in the same HTTP request, a timeout from `distributors/tiktok_remote.py`
+means the connection was actually lost or the worker box is unreachable
+— there's no separate "it might still finish, check the group" case
+anymore. Check `journalctl --user -u mentahanpov-tiktok-worker -f` on
+the campus server and confirm both boxes still show each other in
+`tailscale status`.

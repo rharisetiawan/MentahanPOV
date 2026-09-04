@@ -152,18 +152,24 @@ class Config:
 
     # TikTok — remote worker (distributors/tiktok_remote.py), for
     # bot-triggered runs on hardware that can't run Playwright itself (see
-    # DEPLOYMENT.md -> "TikTok remote worker"). Hands the job to a separate
-    # machine over a shared Telegram group rather than a direct network
-    # connection, since the two boxes are never on the same LAN and
-    # exposing a port between them isn't an option here.
-    tiktok_worker_group_chat_id: int = field(
-        default_factory=lambda: int(_env("TIKTOK_WORKER_GROUP_CHAT_ID", "0"))
+    # DEPLOYMENT.md -> "TikTok remote worker"). Talks directly to
+    # worker_service.py over HTTP on the Tailscale mesh both boxes join —
+    # replaced the earlier Telegram-group relay after discovering Telegram
+    # bots silently can't see messages sent by *other* bots (confirmed
+    # 2026-09-04: the main bot's job postings never reached the worker
+    # bot's getUpdates, in either direction), which made that design
+    # non-functional from the day it was built.
+    tiktok_worker_host: str = field(
+        default_factory=lambda: _env("TIKTOK_WORKER_HOST")
     )
-    # The worker bot's own token — only used by worker_service.py (which
-    # runs on the *other* machine), not by this box's own pipeline. Listed
-    # here anyway so both sides read it from the same env var name.
-    tiktok_worker_bot_token: str = field(
-        default_factory=lambda: _env("TIKTOK_WORKER_BOT_TOKEN")
+    tiktok_worker_port: int = field(
+        default_factory=lambda: int(_env("TIKTOK_WORKER_PORT", "8790"))
+    )
+    # Shared secret both sides read from the same env var — Tailscale
+    # already restricts who can reach the port at all, this just stops
+    # any other device on the same tailnet from queuing jobs.
+    tiktok_worker_shared_secret: str = field(
+        default_factory=lambda: _env("TIKTOK_WORKER_SHARED_SECRET")
     )
     tiktok_remote_timeout_s: int = field(
         default_factory=lambda: int(_env("TIKTOK_REMOTE_TIMEOUT_S", "600"))
