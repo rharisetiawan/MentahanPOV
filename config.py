@@ -164,5 +164,19 @@ class Config:
         default_factory=lambda: Path(_env("STATE_FILE", "./state/posts.json"))
     )
 
+    # Local GUI (dashboard.py) — edit .env / tokens / run the pipeline from
+    # a browser instead of hand-editing files. Binds to localhost only by
+    # default; leave DASHBOARD_PASSWORD empty while it's never reachable
+    # off this machine, set it before widening DASHBOARD_HOST.
+    dashboard_password: str = field(
+        default_factory=lambda: _env("DASHBOARD_PASSWORD")
+    )
+    dashboard_host: str = field(
+        default_factory=lambda: _env("DASHBOARD_HOST", "127.0.0.1")
+    )
+    dashboard_port: int = field(
+        default_factory=lambda: int(_env("DASHBOARD_PORT", "8765"))
+    )
+
 
 config = Config()

@@ -21,6 +21,8 @@ video file ─► ffprobe facts ─► reverse geocode ─► Gemini SOP V3 (JSO
 mentahanpov/
 ├── main.py                  # CLI entry point
 ├── telegram_bot.py          # optional Telegram front-end, runs main.py per video
+├── dashboard.py              # optional local GUI entry point (accounts/tokens/runs)
+├── dashboard/                # Flask app behind dashboard.py — schema-driven from .env.example
 ├── config.py                # env loader + typed config
 ├── core/
 │   ├── video_facts.py       # ffprobe: date, duration, resolution, GPS
@@ -382,6 +384,53 @@ source .venv/bin/activate && python telegram_bot.py
 On macOS, `launchd` (or `pm2` via Node) will also auto-restart it on
 crash/reboot — out of scope here, but worth setting up once this is part
 of your daily routine.
+
+---
+
+## Dashboard (local GUI for accounts, tokens & runs)
+
+Skip this if you're happy editing `.env` and `credentials/*.json` by hand.
+This is for everything above (accounts, API keys, tokens) plus browsing
+history and starting/stopping the bot or a run — all from a browser, no
+terminal or text editor needed after the first `pip install`.
+
+```bash
+python dashboard.py
+```
+
+Opens `http://127.0.0.1:8765` (a browser tab pops automatically) with five
+tabs:
+
+- **Config** — every `.env` value as a form, grouped exactly like
+  `.env.example`'s sections. Secrets (tokens/keys) are masked with a 👁
+  toggle. Saving rewrites `.env` (one rolling backup at `.env.bak`).
+- **Credentials** — upload/replace/delete the token & OAuth JSON files
+  (`gdrive-token.json`, `youtube-oauth.json`, `tiktok-storage.json`, ...).
+  Uploads always land at the exact path `.env` points that key at, so
+  there's no filename to get wrong.
+- **Status** — read-only view of `state/posts.json`: per-video, per-platform
+  status and links.
+- **Bot** — start/stop `telegram_bot.py` as a background process, with a
+  live-tailing log.
+- **Run** — upload a video (or point at one already on disk), pick
+  platforms/flags, and trigger `main.py` directly, with a live-tailing log.
+
+**Changes take effect on the next process you start** — the dashboard
+edits `.env` on disk, it doesn't reach into an already-running bot's
+memory. Restart the bot from the **Bot** tab after saving new tokens.
+
+**Access**: binds to `127.0.0.1` only by default (`DASHBOARD_HOST` /
+`DASHBOARD_PORT` in `.env` to change), so nothing outside this machine can
+reach it as shipped. Set `DASHBOARD_PASSWORD` before ever pointing
+`DASHBOARD_HOST` at `0.0.0.0` or exposing it over a VPN/tunnel — with it
+empty, anyone who can open the URL has full access to every token below.
+
+**Reusing this for another project**: the Config tab's fields, sections,
+and help text are all parsed from `.env.example` at request time
+(`dashboard/env_schema.py`) — nothing is hardcoded. Copy `dashboard.py` +
+`dashboard/` into another project with its own `config.py` (same
+`_env()`/`Config` shape) and `.env.example`, and the same dashboard renders
+that project's own settings.
 
 ---
 

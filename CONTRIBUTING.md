@@ -40,6 +40,7 @@ bot-specific concerns (timeouts, status messages, Telegram file handling).
 | `core/state.py` | The only code that reads/writes `state/posts.json`. Atomic writes (`.tmp` + `replace`). |
 | `distributors/*.py` | One file per publish target — see below. |
 | `distributors/meta_graph.py` | Graph API URL-building + Instagram container polling, shared by every FB/IG distributor. |
+| `dashboard/` | Local GUI (`python dashboard.py`) for `.env`/credential editing and starting/stopping the bot or a run. `dashboard/env_schema.py` parses `.env.example` at request time instead of hardcoding field names, so the form always matches whatever's actually in `.env.example` — add a key there and the Config tab picks it up with no dashboard code changes. |
 
 ## The distributor contract
 

@@ -19,5 +19,8 @@ playwright>=1.42.0
 # Telegram bot front-end (telegram_bot.py)
 python-telegram-bot>=21.0
 
+# Local GUI (dashboard.py) — edit accounts/tokens, run the pipeline, from a browser
+Flask>=3.0.0
+
 # Dev / lint (optional)
 ruff>=0.4.0
