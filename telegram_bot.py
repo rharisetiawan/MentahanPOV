@@ -17,6 +17,14 @@ Each incoming video runs `main.py` as a subprocess (same as running it
 from the terminal yourself) so the bot process itself stays simple and
 can't be taken down by a pipeline crash. Results (platform links or
 errors) are sent back as a chat message.
+
+A video isn't posted immediately: it first runs `main.py --dry-run`
+(metadata, Gemini caption, master upload to Drive — no watermark, no
+posting) and replies with a ✅ Post / ✏️ Edit caption / ❌ Batal keyboard
+so a wrong upload or a bad caption can be caught before anything actually
+goes out. Confirming resumes with `--skip-gdrive --skip-gemini` so none of
+that dry-run work is repeated. See handle_video, handle_confirm_callback,
+and handle_text_reply.
 """
 
 from __future__ import annotations
@@ -32,10 +40,11 @@ import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram import error as telegram_error
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -99,6 +108,15 @@ def _allowed(user_id: int) -> bool:
     if not config.telegram_allowed_user_ids:
         return True  # no allowlist configured -> anyone who has the bot link
     return user_id in config.telegram_allowed_user_ids
+
+
+# chat_id -> state key, set when "✏️ Edit caption" is tapped so the next
+# plain-text message from that chat is read as the replacement caption
+# instead of falling through to handle_other's generic reply. Module-level
+# and unlocked is fine here: the bot is single-process asyncio, and this is
+# just routing state for a human typing a reply within the next message or
+# two, not something that needs to survive a restart.
+_PENDING_EDIT: dict[int, str] = {}
 
 
 def _format_result(returncode: int, stdout: str, stderr: str) -> str:
@@ -250,8 +268,10 @@ class LiveStatus:
             await self._message.reply_text(text, disable_web_page_preview=True)
 
 
-async def _run_pipeline(video_path: Path, status: LiveStatus) -> str:
-    args = [sys.executable, "-u", "main.py", str(video_path)]
+async def _run_pipeline(
+    video_path: Path, status: LiveStatus, *, extra_args: tuple[str, ...] = ()
+) -> str:
+    args = [sys.executable, "-u", "main.py", str(video_path), *extra_args]
     if config.telegram_platforms:
         args += ["--platforms", ",".join(config.telegram_platforms)]
     log.info("[bot] running: %s", " ".join(args))
@@ -334,6 +354,11 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # The clock starts before get_file, not after: with a Local Bot API
     # Server that call blocks for minutes on a big file, and that silent
     # gap is exactly where a run previously looked dead.
+    #
+    # This only runs main.py --dry-run (facts + geocode + Gemini caption +
+    # Drive master upload — no watermark, no posting) so there's something
+    # concrete to review before anything actually goes out. Confirming
+    # resumes with --skip-gdrive --skip-gemini so nothing here gets redone.
     async with LiveStatus(
         status_msg,
         f"Ambil video dari Telegram ({size_note})...",
@@ -355,19 +380,23 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
 
             status.set(
-                "⚙️ Mulai proses...",
-                note="Biasanya 3-5 menit: Gemini → Drive → watermark → posting.",
+                "🔍 Cek metadata + siapin caption (dry-run)...",
+                note="Biasanya 1-3 menit: metadata → Gemini → upload master ke Drive.",
             )
-            result = await _run_pipeline(local_path, status)
+            result = await _run_pipeline(local_path, status, extra_args=("--dry-run",))
         except Exception as exc:  # noqa: BLE001 — report, don't crash the bot
-            log.exception("[bot] pipeline crashed")
-            result = f"💥 Error gak terduga: {type(exc).__name__}: {exc}"
-            local_path = None
+            log.exception("[bot] dry-run crashed")
+            await status.finish(f"💥 Error gak terduga: {type(exc).__name__}: {exc}")
+            return
 
-        await status.finish(result)
+        entry = pipeline_state.get(config.state_file, local_path)
+        ready = bool(entry.get("caption")) and bool(entry.get("gemini", {}).get("file_name"))
+        if not ready:
+            await status.finish(f"⚠️ Gagal nyiapin video buat direview.\n\n{result}")
+            return
+        await status.finish("🔍 Siap direview — cek pesan di bawah 👇")
 
-    if local_path is not None:
-        await _send_tiktok_kit(update.message, local_path)
+    await _send_confirmation(update.message, local_path)
 
 
 async def _warn_if_metadata_stripped(
@@ -410,6 +439,120 @@ async def _warn_if_metadata_stripped(
         await message.reply_text(hint, parse_mode="Markdown")
     except Exception:  # noqa: BLE001
         log.exception("[bot] failed to send metadata warning")
+
+
+def _confirmation_text(entry: dict) -> str:
+    gemini = entry.get("gemini", {})
+    return (
+        f"📁 Folder: {gemini.get('folder', '?')}\n"
+        f"📄 Nama file: {gemini.get('file_name', '?')}\n\n"
+        f"📝 Caption:\n{entry.get('caption', '(kosong)')}\n\n"
+        "Lanjut posting ke semua platform?"
+    )
+
+
+async def _send_confirmation(message, video_path: Path) -> None:
+    entry = pipeline_state.get(config.state_file, video_path)
+    key = pipeline_state.video_key(video_path)
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Post", callback_data=f"post:{key}"),
+                InlineKeyboardButton("✏️ Edit caption", callback_data=f"edit:{key}"),
+                InlineKeyboardButton("❌ Batal", callback_data=f"cancel:{key}"),
+            ]
+        ]
+    )
+    await message.reply_text(_confirmation_text(entry), reply_markup=keyboard)
+
+
+async def handle_confirm_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handles the ✅ Post / ✏️ Edit caption / ❌ Batal buttons from
+    _send_confirmation. video_path is looked up from state.json by key
+    rather than carried in callback_data (Telegram caps that at 64 bytes,
+    nowhere near enough for a real path) — see
+    core.state.video_path_for_key.
+    """
+    query = update.callback_query
+    if query is None or query.data is None or query.message is None:
+        return
+    if update.effective_user is None or not _allowed(update.effective_user.id):
+        await query.answer("Belum diizinkan.", show_alert=True)
+        return
+    await query.answer()
+
+    action, _, key = query.data.partition(":")
+    video_path = pipeline_state.video_path_for_key(config.state_file, key)
+    if video_path is None:
+        await query.edit_message_text(
+            "⚠️ Sesi ini sudah gak valid (bot mungkin sempat restart). "
+            "Kirim ulang videonya."
+        )
+        return
+
+    if action == "cancel":
+        _PENDING_EDIT.pop(query.message.chat_id, None)
+        try:
+            if video_path.exists():
+                video_path.unlink()
+        except OSError:
+            log.exception("[bot] failed to delete cancelled video: %s", video_path)
+        await query.edit_message_text("❌ Dibatalkan, video dihapus.")
+        return
+
+    if action == "edit":
+        _PENDING_EDIT[query.message.chat_id] = key
+        await query.edit_message_text(
+            "✏️ Kirim caption baru sebagai balasan (teks biasa)."
+        )
+        return
+
+    if action == "post":
+        await query.edit_message_text("▶️ Lanjut posting...")
+        status_msg = await query.message.reply_text("⚙️ Mulai posting...")
+        async with LiveStatus(status_msg, "Bersiap posting...") as status:
+            status.set(
+                "⚙️ Mulai posting...",
+                note="Watermark → posting ke platform, biasanya 2-4 menit.",
+            )
+            try:
+                result = await _run_pipeline(
+                    video_path, status, extra_args=("--skip-gdrive", "--skip-gemini")
+                )
+            except Exception as exc:  # noqa: BLE001 — report, don't crash the bot
+                log.exception("[bot] confirmed pipeline run crashed")
+                result = f"💥 Error gak terduga: {type(exc).__name__}: {exc}"
+            await status.finish(result)
+        await _send_tiktok_kit(query.message, video_path)
+        return
+
+
+async def handle_text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Routes a plain-text message to whichever ✏️ Edit caption request is
+    pending for this chat, if any — otherwise falls through to
+    handle_other's generic reply, same as any other non-video message."""
+    if update.message is None or update.effective_chat is None:
+        return
+    key = _PENDING_EDIT.get(update.effective_chat.id)
+    if key is None:
+        await handle_other(update, context)
+        return
+    if update.effective_user is None or not _allowed(update.effective_user.id):
+        return
+
+    _PENDING_EDIT.pop(update.effective_chat.id, None)
+    video_path = pipeline_state.video_path_for_key(config.state_file, key)
+    if video_path is None:
+        await update.message.reply_text(
+            "⚠️ Sesi ini sudah gak valid, kirim ulang videonya."
+        )
+        return
+
+    pipeline_state.update(config.state_file, video_path, {"caption": update.message.text})
+    await update.message.reply_text("✅ Caption diupdate.")
+    await _send_confirmation(update.message, video_path)
 
 
 async def _send_tiktok_kit(message, source_video: Path) -> None:
@@ -592,14 +735,20 @@ def main() -> None:
             "'Telegram bot' to remove that limit."
         )
     app = builder.build()
-    # CommandHandler must be registered before the filters.ALL catch-all
-    # below — same group, first match wins, and filters.ALL matches
-    # commands too.
+    # CommandHandler/CallbackQueryHandler/the TEXT handler must all be
+    # registered before the filters.ALL catch-all below — same group,
+    # first match wins, and filters.ALL matches everything else does too.
     app.add_handler(CommandHandler("status", handle_status))
     app.add_handler(CommandHandler("dashboard", handle_dashboard))
     app.add_handler(
+        CallbackQueryHandler(handle_confirm_callback, pattern=r"^(post|cancel|edit):")
+    )
+    app.add_handler(
         MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video)
     )
+    # Catches the caption text typed after "✏️ Edit caption"; falls through
+    # to handle_other itself when no edit is pending for that chat.
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_reply))
     app.add_handler(MessageHandler(filters.ALL, handle_other))
     app.add_error_handler(handle_error)
 
