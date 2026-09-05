@@ -1,22 +1,23 @@
-"""Gemini wrapper that produces SOP V3 metadata for a video.
+"""Gemini wrapper that produces SOP V3 caption/filename/folder metadata.
 
-Output is plain text formatted to match the SOP V3 spec:
-    [VISUAL ANALYSIS]
-    ...
-    [DRAFT CAPTION]
-    ...
-    [CLOUD STORAGE]
-    <gdrive_url>
+Ground-truth facts (date, address, coordinates, duration, resolution) are
+extracted locally (see core/video_facts.py + core/geocode.py) and fed into
+the prompt so Gemini only has to be creative about the vibe/title/caption
+and pick the right Drive folder — it never invents the facts themselves.
+Output is strict JSON: {"caption", "file_name", "folder"}.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import config
@@ -28,89 +29,178 @@ PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "sop_v3.txt"
 
 @dataclass
 class GeminiOutput:
-    visual_analysis: str
-    draft_caption: str
-    cloud_storage: str
+    caption: str
+    file_name: str
+    folder: str
     raw: str
 
-    def to_caption(self, max_len: int = 2200) -> str:
-        """Caption used for posting (just the vibes part, no headers)."""
-        return self.draft_caption[:max_len].strip()
 
-
-def _load_prompt(gdrive_url: str) -> str:
+def _load_prompt(
+    *,
+    date: str,
+    address: str | None,
+    coordinates: str | None,
+    duration_s: int,
+    resolution: str,
+) -> str:
     if not PROMPT_PATH.exists():
         raise FileNotFoundError(f"SOP V3 prompt not found at {PROMPT_PATH}")
     template = PROMPT_PATH.read_text(encoding="utf-8")
-    return template.replace("{{GDRIVE_URL}}", gdrive_url)
+    folders_list = "\n".join(f"- {f}" for f in config.drive_categories)
+
+    # With no GPS in the file there is nothing honest to print, so the whole
+    # location line — and the location half of the file name — is dropped
+    # rather than filled with "not available", which previously leaked into
+    # captions and produced names like 20260813_NO_LOCATION_....
+    # Deriving <LOCATION> is left to Gemini rather than parsed here: picking
+    # the city out of a Nominatim address ("…Sukun, Kota Malang, Klojen,
+    # Jawa Timur, 65147, Indonesia") by position gets the province wrong as
+    # often as not.
+    if address and coordinates:
+        address_fact = f"- Address: {address}"
+        location_line = f"📍 Location: {address} ({coordinates})"
+        filename_pattern = f"{date}_<LOCATION>_<VIBE>_{duration_s}s_{resolution}.mp4"
+    else:
+        address_fact = "- Address: (none — this file carries no GPS)"
+        location_line = ""
+        filename_pattern = f"{date}_<VIBE>_{duration_s}s_{resolution}.mp4"
+
+    return (
+        template.replace("{{DATE}}", date)
+        .replace("{{ADDRESS_FACT}}", address_fact)
+        .replace("{{LOCATION_LINE}}", location_line)
+        .replace("{{FILENAME_PATTERN}}", filename_pattern)
+        .replace("{{DURATION_S}}", str(duration_s))
+        .replace("{{RESOLUTION}}", resolution)
+        .replace("{{FOLDERS_LIST}}", folders_list)
+    )
 
 
-def _wait_active(file: "genai.types.File", timeout: int = 300) -> None:
+def _wait_active(
+    client: genai.Client, file: genai_types.File, timeout: int = 300
+) -> None:
     """Poll until uploaded video is ACTIVE (Gemini File API processes async)."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        f = genai.get_file(file.name)
-        if f.state.name == "ACTIVE":
+        f = client.files.get(name=file.name)
+        if f.state == "ACTIVE":
             return
-        if f.state.name == "FAILED":
+        if f.state == "FAILED":
             raise RuntimeError(f"Gemini file {file.name} failed processing")
         time.sleep(3)
     raise TimeoutError(f"Gemini file {file.name} not ACTIVE after {timeout}s")
 
 
-def _parse(raw: str, gdrive_url: str) -> GeminiOutput:
-    """Best-effort parser for the [HEADER] sections."""
-    sections = {"VISUAL ANALYSIS": "", "DRAFT CAPTION": "", "CLOUD STORAGE": ""}
-    current = None
-    buffer: list[str] = []
+def _tidy_caption(caption: str) -> str:
+    """Collapse the gap left behind when the location line is omitted.
 
-    def flush() -> None:
-        if current:
-            sections[current] = "\n".join(buffer).strip()
+    The template has a blank line on either side of the location line, so
+    dropping it leaves three consecutive newlines. Asking the model to
+    handle that itself is unreliable, so it's normalised here instead.
+    """
+    return re.sub(r"\n{3,}", "\n\n", caption).strip()
 
-    for line in raw.splitlines():
-        stripped = line.strip()
-        upper = stripped.upper().strip("[]: ").strip()
-        if upper in sections:
-            flush()
-            current = upper
-            buffer = []
-            continue
-        if current:
-            buffer.append(line)
-    flush()
 
-    cloud = sections["CLOUD STORAGE"] or gdrive_url
-    return GeminiOutput(
-        visual_analysis=sections["VISUAL ANALYSIS"],
-        draft_caption=sections["DRAFT CAPTION"],
-        cloud_storage=cloud,
-        raw=raw,
-    )
+def _parse_json(raw: str) -> dict:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+    return json.loads(text.strip())
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
-def generate_metadata(video_path: Path, gdrive_url: str) -> GeminiOutput:
-    if not config.gemini_api_key:
-        raise RuntimeError("GEMINI_API_KEY is empty. See README → 'Gemini setup'.")
-    genai.configure(api_key=config.gemini_api_key)
-
+def _upload_and_wait(client: genai.Client, video_path: Path) -> genai_types.File:
     log.info("[gemini] uploading %s to File API", video_path.name)
-    file = genai.upload_file(path=str(video_path), display_name=video_path.name)
-    _wait_active(file)
+    file = client.files.upload(file=str(video_path))
+    _wait_active(client, file)
+    return file
 
-    prompt = _load_prompt(gdrive_url)
-    model = genai.GenerativeModel(config.gemini_model)
-    log.info("[gemini] generating SOP V3 metadata with %s", config.gemini_model)
 
-    response = model.generate_content(
-        [file, prompt],
-        generation_config={"temperature": 0.85, "top_p": 0.95},
+# Gemini's "high demand" 503s are Google-side and have outlasted a short
+# backoff window in practice (seen repeatedly in one day against
+# gemini-2.5-flash, one run spending 7+ minutes straight 503ing). This
+# retries only the generation+parse step, not the upload above — redoing
+# a multi-hundred-MB upload on every retry would waste real minutes on
+# slow hardware for no reason once the bytes are already sitting in the
+# File API. ~5+10+20+40+60s across 5 waits gives a demand spike roughly
+# 2-3 minutes to clear before giving up on this model.
+@retry(stop=stop_after_attempt(6), wait=wait_exponential(multiplier=5, min=5, max=60))
+def _generate_and_parse(
+    client: genai.Client, file: genai_types.File, prompt: str, model: str
+) -> tuple[dict, str]:
+    log.info("[gemini] generating SOP V3 metadata with %s", model)
+    response = client.models.generate_content(
+        model=model,
+        contents=[file, prompt],
+        config=genai_types.GenerateContentConfig(
+            temperature=0.85,
+            top_p=0.95,
+            response_mime_type="application/json",
+        ),
     )
     raw = response.text or ""
     log.debug("[gemini] raw response:\n%s", raw)
 
-    parsed = _parse(raw, gdrive_url)
-    if not parsed.draft_caption:
-        raise RuntimeError("Gemini response missing [DRAFT CAPTION] section")
-    return parsed
+    data = _parse_json(raw)
+    for key in ("caption", "file_name", "folder"):
+        if not data.get(key):
+            raise RuntimeError(f"Gemini response missing '{key}' key: {raw}")
+    if data["folder"] not in config.drive_categories:
+        raise RuntimeError(
+            f"Gemini picked an unknown folder {data['folder']!r}; "
+            f"expected one of {config.drive_categories}"
+        )
+    return data, raw
+
+
+def generate_metadata(
+    video_path: Path,
+    *,
+    date: str,
+    address: str,
+    coordinates: str,
+    duration_s: int,
+    resolution: str,
+) -> GeminiOutput:
+    if not config.gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY is empty. See README → 'Gemini setup'.")
+    client = genai.Client(api_key=config.gemini_api_key)
+
+    file = _upload_and_wait(client, video_path)
+
+    prompt = _load_prompt(
+        date=date,
+        address=address,
+        coordinates=coordinates,
+        duration_s=duration_s,
+        resolution=resolution,
+    )
+
+    # A "high demand" 503 tends to be specific to one model's capacity
+    # pool — often the newest release, which is where demand spikes
+    # concentrate — so a model that's still fully capable but not the one
+    # everyone's currently hammering is a free way to ride it out instead
+    # of just waiting. Only kicks in once GEMINI_MODEL has exhausted its
+    # own retries above; same file, no re-upload either way.
+    models = [config.gemini_model]
+    if config.gemini_fallback_model and config.gemini_fallback_model not in models:
+        models.append(config.gemini_fallback_model)
+
+    last_exc: Exception | None = None
+    for model in models:
+        try:
+            data, raw = _generate_and_parse(client, file, prompt, model)
+            return GeminiOutput(
+                caption=_tidy_caption(data["caption"]),
+                file_name=data["file_name"],
+                folder=data["folder"],
+                raw=raw,
+            )
+        except Exception as exc:  # noqa: BLE001 — try the next model, if any
+            last_exc = exc
+            log.warning("[gemini] %s exhausted its retries: %s", model, exc)
+
+    assert last_exc is not None  # models is never empty
+    raise last_exc

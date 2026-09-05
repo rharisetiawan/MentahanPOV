@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Bot — MentahanPOV Dashboard{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Telegram bot <span id="status-badge" class="badge {{ 'running' if status.running else 'stopped' }}">{{ 'running' if status.running else 'stopped' }}</span></h2>
+  <p class="muted">Container <code>mentahanpov-bot</code> (docker compose). Tutup tab ini gak menghentikan bot-nya.</p>
+  <div class="actions">
+    <form method="post" action="{{ url_for('bot_start') }}"><button type="submit" id="start-btn" {{ 'disabled' if status.running }}>Start</button></form>
+    <form method="post" action="{{ url_for('bot_stop') }}"><button type="submit" id="stop-btn" class="danger" {{ 'disabled' if not status.running }}>Stop</button></form>
+  </div>
+</div>
+<div class="card">
+  <h2>Terapkan perubahan .env</h2>
+  <p class="muted">
+    <code>docker compose up -d</code> — recreate semua service pakai isi
+    <code>.env</code> terbaru. Wajib dijalankan setelah simpan di tab Config,
+    soalnya container gak baca ulang <code>.env</code> sendiri.
+  </p>
+  <form method="post" action="{{ url_for('bot_apply') }}">
+    <button type="submit">Terapkan (docker compose up -d)</button>
+  </form>
+</div>
+<div class="card">
+  <h2>Log</h2>
+  <pre class="log" id="log">{{ status.log }}</pre>
+</div>
+<script>
+function poll() {
+  fetch("{{ url_for('bot_log_json') }}").then(function (r) { return r.json(); }).then(function (data) {
+    var pre = document.getElementById("log");
+    var atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+    pre.textContent = data.log;
+    if (atBottom) pre.scrollTop = pre.scrollHeight;
+    var badge = document.getElementById("status-badge");
+    badge.textContent = data.running ? "running" : "stopped";
+    badge.className = "badge " + (data.running ? "running" : "stopped");
+    document.getElementById("start-btn").disabled = data.running;
+    document.getElementById("stop-btn").disabled = !data.running;
+  }).catch(function () {});
+}
+setInterval(poll, 3000);
+</script>
+{% endblock %}
