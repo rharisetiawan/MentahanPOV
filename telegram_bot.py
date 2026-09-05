@@ -40,7 +40,7 @@ import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram import error as telegram_error
 from telegram.ext import (
     Application,
@@ -778,6 +778,21 @@ async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> No
         log.exception("[bot] could not report the error to the chat")
 
 
+_BOT_COMMANDS = [
+    BotCommand("status", "Cek status integrasi (Gemini, Drive, YouTube, Meta, Threads)"),
+    BotCommand("dashboard", "Link ke admin dashboard (edit token, kontrol bot)"),
+]
+
+
+async def _post_init(app: Application) -> None:
+    """Registers the / command menu Telegram shows in the chat's own UI
+    (the "/" or menu-icon picker) — without this, /status and /dashboard
+    still work, they just aren't listed anywhere; you'd have to already
+    know to type them. Safe to call on every startup: Telegram just
+    overwrites the list with the same values."""
+    await app.bot.set_my_commands(_BOT_COMMANDS)
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -791,6 +806,7 @@ def main() -> None:
     builder = (
         Application.builder()
         .token(config.telegram_bot_token)
+        .post_init(_post_init)
         # getFile against a Local Bot API Server blocks while that server
         # pulls the whole file from Telegram — minutes for the untouched HD
         # masters this is built for. The library's 5s default aborts long
