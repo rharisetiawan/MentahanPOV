@@ -272,7 +272,11 @@ async def _run_pipeline(
     video_path: Path, status: LiveStatus, *, extra_args: tuple[str, ...] = ()
 ) -> str:
     args = [sys.executable, "-u", "main.py", str(video_path), *extra_args]
-    if config.telegram_platforms:
+    # argparse takes the *last* --platforms if it's passed twice, so this
+    # would silently override a caller-supplied one (e.g. a single-platform
+    # retry) with the full configured list — only fill it in when the
+    # caller didn't already ask for something more specific.
+    if config.telegram_platforms and "--platforms" not in extra_args:
         args += ["--platforms", ",".join(config.telegram_platforms)]
     log.info("[bot] running: %s", " ".join(args))
 
@@ -483,7 +487,9 @@ async def handle_confirm_callback(
         return
     await query.answer()
 
-    action, _, key = query.data.partition(":")
+    action, _, rest = query.data.partition(":")
+    # retry's callback_data carries a platform name too: "retry:{key}:{platform}".
+    key, _, platform = rest.partition(":")
     video_path = pipeline_state.video_path_for_key(config.state_file, key)
     if video_path is None:
         await query.edit_message_text(
@@ -525,7 +531,59 @@ async def handle_confirm_callback(
                 log.exception("[bot] confirmed pipeline run crashed")
                 result = f"💥 Error gak terduga: {type(exc).__name__}: {exc}"
             await status.finish(result)
-        await _send_tiktok_kit(query.message, video_path)
+
+        entry = pipeline_state.get(config.state_file, video_path)
+        if entry.get("platforms", {}).get("tiktok", {}).get("status") != "ok":
+            # Only the manual fallback: an automated TikTok post (see
+            # distributors/tiktok_remote.py) already shows up in `result`
+            # above like any other platform — sending the kit on top of a
+            # real success would just be confusing leftover-menu noise.
+            await _send_tiktok_kit(query.message, video_path)
+        await _send_retry_keyboard(query.message, video_path, entry)
+        return
+
+    if action == "retry":
+        if not platform:
+            return
+        # Remove just the tapped button (not the whole keyboard — a
+        # message can offer retries for several failed platforms at once,
+        # and the others should stay tappable) so a double-tap can't fire
+        # two concurrent retries of the same platform, which could
+        # genuinely double-post.
+        try:
+            markup = query.message.reply_markup
+            if markup:
+                rows = [
+                    [b for b in row if b.callback_data != query.data]
+                    for row in markup.inline_keyboard
+                ]
+                rows = [row for row in rows if row]
+                await query.edit_message_reply_markup(
+                    reply_markup=InlineKeyboardMarkup(rows) if rows else None
+                )
+        except Exception:  # noqa: BLE001 — cosmetic only, never blocks the retry
+            pass
+        status_msg = await query.message.reply_text(f"🔁 Retry {platform}...")
+        async with LiveStatus(status_msg, f"🔁 Retry {platform}...") as status:
+            try:
+                result = await _run_pipeline(
+                    video_path,
+                    status,
+                    extra_args=(
+                        "--platforms",
+                        platform,
+                        "--skip-gdrive",
+                        "--skip-gemini",
+                        "--skip-watermark",
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001 — report, don't crash the bot
+                log.exception("[bot] retry crashed")
+                result = f"💥 Error gak terduga: {type(exc).__name__}: {exc}"
+            await status.finish(result)
+
+        entry = pipeline_state.get(config.state_file, video_path)
+        await _send_retry_keyboard(query.message, video_path, entry)
         return
 
 
@@ -555,15 +613,42 @@ async def handle_text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await _send_confirmation(update.message, video_path)
 
 
-async def _send_tiktok_kit(message, source_video: Path) -> None:
-    """Send back everything needed to post this clip to TikTok by hand.
+async def _send_retry_keyboard(message, video_path: Path, entry: dict) -> None:
+    """One 🔁 Retry button per platform that didn't end up "ok", so a
+    single YouTube failure (say) doesn't mean re-doing Instagram/Facebook
+    too — each button re-runs main.py for just that platform with
+    --skip-gdrive --skip-gemini --skip-watermark, reusing everything
+    already produced. No-op if everything already succeeded."""
+    key = pipeline_state.video_key(video_path)
+    failed = [
+        name
+        for name, info in entry.get("platforms", {}).items()
+        if info.get("status") != "ok"
+    ]
+    if not failed:
+        return
+    buttons = [
+        InlineKeyboardButton(f"🔁 Retry {name}", callback_data=f"retry:{key}:{name}")
+        for name in failed
+    ]
+    rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
+    await message.reply_text(
+        "Ada platform yang gagal — retry satu-satu tanpa ngulang yang lain:",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
 
-    TikTok is the one platform this pipeline can't publish to from the
-    always-on box: it has no official API here, so it needs a real browser
-    driving TikTok Studio — which won't run on an ARM board with ~800MB of
-    free RAM. Rather than automate it badly, the bot hands over the exact
-    watermarked file and caption so posting is a save-and-upload on the
-    phone that's already in your hand.
+
+async def _send_tiktok_kit(message, source_video: Path) -> None:
+    """Fallback only: send the watermarked file + caption so TikTok can be
+    posted by hand from the phone that's already in your hand.
+
+    Only called when TikTok's automated path (distributors/tiktok_remote.py
+    when TIKTOK_WORKER_HOST is set, distributors/tiktok.py when a local
+    Playwright/Chromium is available) either isn't configured for this run
+    or actually failed — a successful automated post already shows up in
+    the normal per-platform result text, so sending this on top of that
+    would just be confusing leftover-menu noise from before the remote
+    worker existed.
     """
     entry = pipeline_state.get(config.state_file, source_video)
     caption = entry.get("caption")
@@ -741,7 +826,7 @@ def main() -> None:
     app.add_handler(CommandHandler("status", handle_status))
     app.add_handler(CommandHandler("dashboard", handle_dashboard))
     app.add_handler(
-        CallbackQueryHandler(handle_confirm_callback, pattern=r"^(post|cancel|edit):")
+        CallbackQueryHandler(handle_confirm_callback, pattern=r"^(post|cancel|edit|retry):")
     )
     app.add_handler(
         MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video)
