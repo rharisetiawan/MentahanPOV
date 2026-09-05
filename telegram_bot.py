@@ -533,6 +533,7 @@ async def handle_confirm_callback(
             await status.finish(result)
 
         entry = pipeline_state.get(config.state_file, video_path)
+        await _send_caption_recap(query.message, entry.get("caption", ""))
         if entry.get("platforms", {}).get("tiktok", {}).get("status") != "ok":
             # Only the manual fallback: an automated TikTok post (see
             # distributors/tiktok_remote.py) already shows up in `result`
@@ -583,6 +584,7 @@ async def handle_confirm_callback(
             await status.finish(result)
 
         entry = pipeline_state.get(config.state_file, video_path)
+        await _send_caption_recap(query.message, entry.get("caption", ""))
         await _send_retry_keyboard(query.message, video_path, entry)
         return
 
@@ -611,6 +613,26 @@ async def handle_text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     pipeline_state.update(config.state_file, video_path, {"caption": update.message.text})
     await update.message.reply_text("✅ Caption diupdate.")
     await _send_confirmation(update.message, video_path)
+
+
+async def _send_caption_recap(message, caption: str) -> None:
+    """Always resend the caption as a one-tap-copy block after a post or a
+    retry, success or not.
+
+    Not conditional on a visible failure — the TikTok empty-caption bug
+    (2026-09-05) posted successfully with no caption and *no error
+    anywhere*, so gating this on "something looked wrong" would have
+    missed exactly the case it exists for. Having the real caption in the
+    chat every time means a silent miss on any platform is still just a
+    copy-paste away from fixed by hand, not a trip to the server.
+    """
+    if not caption:
+        return
+    await message.reply_text(
+        f"📝 Caption yang dipakai (buat jaga-jaga kalau ada yang perlu diposting/dibetulin manual):\n"
+        f"<pre>{html.escape(caption)}</pre>",
+        parse_mode="HTML",
+    )
 
 
 async def _send_retry_keyboard(message, video_path: Path, entry: dict) -> None:
