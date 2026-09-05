@@ -257,6 +257,14 @@ class Config:
     # collides with the read-only dashboard. Reuses DASHBOARD_USER/
     # DASHBOARD_PASSWORD above rather than a second credential.
     admin_port: int = field(default_factory=lambda: int(_env("ADMIN_PORT", "8091")))
+    # Full URL telegram_bot.py's /dashboard command replies with (e.g.
+    # "http://100.73.125.7:8091", the box's Tailscale IP) — a Tailscale IP
+    # rather than the LAN one so the link still works from outside the
+    # house. Left empty, /dashboard just points at DEPLOYMENT.md instead
+    # of guessing a URL that might not resolve for whoever's reading it.
+    admin_dashboard_url: str = field(
+        default_factory=lambda: _env("ADMIN_DASHBOARD_URL")
+    )
 
 
 config = Config()

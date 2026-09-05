@@ -300,6 +300,14 @@ anything (`docker compose up -d` recreates whichever service's config
 changed, and `env_file` is only read at container *creation*). The Bot
 tab has a "Terapkan" button that runs exactly that.
 
+**Telegram `/dashboard`** replies with the link (set `ADMIN_DASHBOARD_URL`
+in `.env` to this box's Tailscale IP, e.g. `http://100.73.125.7:8091`) —
+same allowlist as `/status` and video uploads, since whoever can reach it
+can rewrite every credential the pipeline uses. Requires a
+`docker compose build mentahanpov-bot` + `docker compose up -d` to pick up
+(it's a code change to `telegram_bot.py`, baked into the image like
+everything else that isn't bind-mounted).
+
 ## TikTok remote worker
 
 Added 2026-09-02, redesigned 2026-09-04. The HG680P is an ARM board with

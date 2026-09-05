@@ -482,6 +482,29 @@ async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await msg.edit_text(_format_health_report(results))
 
 
+async def handle_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Reply with the admin dashboard's link — see admin.py + DEPLOYMENT.md
+    -> "Admin dashboard". Same allowlist as /status and video uploads:
+    whoever can trigger a post can also rewrite the tokens behind it, so
+    this is not something to hand out more loosely than that."""
+    if update.message is None or update.effective_user is None:
+        return
+    if not _allowed(update.effective_user.id):
+        return
+    if config.admin_dashboard_url:
+        await update.message.reply_text(
+            f"🛠 Admin dashboard: {config.admin_dashboard_url}\n\n"
+            "Login pakai DASHBOARD_USER/DASHBOARD_PASSWORD. Butuh Tailscale "
+            "aktif di HP/laptop kalau lagi di luar rumah.",
+            disable_web_page_preview=True,
+        )
+    else:
+        await update.message.reply_text(
+            "ADMIN_DASHBOARD_URL belum di-set di .env — lihat DEPLOYMENT.md "
+            "-> 'Admin dashboard' buat cara aksesnya."
+        )
+
+
 async def daily_status_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     results = await asyncio.to_thread(health.run_all)
     text = "📋 Laporan status harian\n\n" + _format_health_report(results)
@@ -573,6 +596,7 @@ def main() -> None:
     # below — same group, first match wins, and filters.ALL matches
     # commands too.
     app.add_handler(CommandHandler("status", handle_status))
+    app.add_handler(CommandHandler("dashboard", handle_dashboard))
     app.add_handler(
         MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video)
     )
