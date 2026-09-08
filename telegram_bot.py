@@ -118,6 +118,21 @@ def _allowed(user_id: int) -> bool:
 # two, not something that needs to survive a restart.
 _PENDING_EDIT: dict[int, str] = {}
 
+# Only one main.py subprocess runs at a time, across every chat — the
+# HG680 this normally runs on is weak enough that two pipelines fighting
+# over it (watermark render, uploads) would likely make both slower than
+# running back-to-back, not faster. asyncio.Lock is FIFO, so a second
+# caller just waits its turn with no extra queue bookkeeping needed.
+_PIPELINE_LOCK = asyncio.Lock()
+
+# The single in-flight run's subprocess + video_key, so a "🛑 Stop" tap
+# (a *different* update, handled concurrently by handle_confirm_callback)
+# can find and kill it. None when idle. Safe unlocked: only the coroutine
+# inside _run_pipeline ever reassigns this name; a stop tap only mutates
+# the dict it points at ("stopped"), which asyncio's single-threaded
+# cooperative scheduling makes safe without an explicit lock.
+_ACTIVE_RUN: dict[str, object] | None = None
+
 
 def _format_result(returncode: int, stdout: str, stderr: str) -> str:
     # main.py's logging.basicConfig() defaults to stderr, not stdout — the
@@ -198,7 +213,14 @@ class LiveStatus:
     _FRAMES = "◐◓◑◒"
     CHECKPOINT_INTERVAL_S = 180  # 3 min — real ping, not just an edit
 
-    def __init__(self, message, stage: str, *, timeout_s: int = PIPELINE_TIMEOUT_S) -> None:
+    def __init__(
+        self,
+        message,
+        stage: str,
+        *,
+        timeout_s: int = PIPELINE_TIMEOUT_S,
+        stop_key: str | None = None,
+    ) -> None:
         self._message = message
         self._stage = stage
         self._note = ""
@@ -207,10 +229,24 @@ class LiveStatus:
         self._timeout_s = timeout_s
         self._last_checkpoint = 0.0
         self._task: asyncio.Task | None = None
+        self._stop_key = stop_key
 
     def set(self, stage: str, note: str = "") -> None:
         self._stage = stage
         self._note = note
+
+    def set_stop_key(self, key: str) -> None:
+        """Attach the 🛑 Stop button once the video_key is known — handle_video
+        doesn't have one yet when its LiveStatus is first constructed, since
+        that's only derivable from local_path after the Telegram download."""
+        self._stop_key = key
+
+    def _markup(self) -> InlineKeyboardMarkup | None:
+        if not self._stop_key:
+            return None
+        return InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🛑 Stop", callback_data=f"stop:{self._stop_key}")]]
+        )
 
     def _render(self) -> str:
         elapsed = int(time.monotonic() - self._start)
@@ -243,7 +279,11 @@ class LiveStatus:
             await asyncio.sleep(STATUS_TICK_S)
             self._tick += 1
             try:
-                await self._message.edit_text(self._render())
+                # reply_markup passed explicitly every tick (not just set
+                # once) so the Stop button can't silently disappear on a
+                # later edit — safer than relying on exactly how Telegram
+                # treats an omitted reply_markup on an edit call.
+                await self._message.edit_text(self._render(), reply_markup=self._markup())
             except Exception:  # noqa: BLE001 — a dropped frame is harmless
                 pass
             await self._maybe_checkpoint()
@@ -262,7 +302,11 @@ class LiveStatus:
             self._task.cancel()
             self._task = None
         try:
-            await self._message.edit_text(text, disable_web_page_preview=True)
+            # reply_markup=None here (not self._markup()) so the Stop
+            # button is removed once there's nothing left to stop.
+            await self._message.edit_text(
+                text, disable_web_page_preview=True, reply_markup=None
+            )
         except Exception:  # noqa: BLE001
             log.exception("[bot] failed to edit final status, sending fresh one")
             await self._message.reply_text(text, disable_web_page_preview=True)
@@ -271,63 +315,82 @@ class LiveStatus:
 async def _run_pipeline(
     video_path: Path, status: LiveStatus, *, extra_args: tuple[str, ...] = ()
 ) -> str:
-    args = [sys.executable, "-u", "main.py", str(video_path), *extra_args]
-    # argparse takes the *last* --platforms if it's passed twice, so this
-    # would silently override a caller-supplied one (e.g. a single-platform
-    # retry) with the full configured list — only fill it in when the
-    # caller didn't already ask for something more specific.
-    if config.telegram_platforms and "--platforms" not in extra_args:
-        args += ["--platforms", ",".join(config.telegram_platforms)]
-    log.info("[bot] running: %s", " ".join(args))
+    global _ACTIVE_RUN
+    key = pipeline_state.video_key(video_path)
 
-    proc = await asyncio.create_subprocess_exec(
-        *args,
-        cwd=REPO_ROOT,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
+    if _PIPELINE_LOCK.locked():
+        status.set("⏳ Antre — ada proses lain lagi jalan, ini otomatis lanjut begitu selesai...")
 
-    # main.py's own stdout/stderr only ever lived in an in-memory list
-    # before this — invisible to `docker compose logs` and gone forever if
-    # the process got killed on timeout. Persisting it as it streams means
-    # a run that goes wrong can actually be cross-checked afterward instead
-    # of guessed at.
-    RUN_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = RUN_LOG_DIR / f"{pipeline_state.video_key(video_path)}.log"
+    async with _PIPELINE_LOCK:
+        args = [sys.executable, "-u", "main.py", str(video_path), *extra_args]
+        # argparse takes the *last* --platforms if it's passed twice, so this
+        # would silently override a caller-supplied one (e.g. a single-platform
+        # retry) with the full configured list — only fill it in when the
+        # caller didn't already ask for something more specific.
+        if config.telegram_platforms and "--platforms" not in extra_args:
+            args += ["--platforms", ",".join(config.telegram_platforms)]
+        log.info("[bot] running: %s", " ".join(args))
 
-    lines: list[str] = []
-
-    async def _read_stream() -> None:
-        assert proc.stdout is not None
-        with log_path.open("w", encoding="utf-8") as log_fh:
-            async for raw in proc.stdout:
-                line = raw.decode(errors="replace").rstrip()
-                lines.append(line)
-                log_fh.write(line + "\n")
-                log_fh.flush()
-
-                pct = _GDRIVE_PCT_RE.search(line)
-                if pct:
-                    status.set(f"☁️ Upload video HD ke Google Drive... {pct.group(1)}%")
-                    continue
-                for needle, message in _STAGE_PATTERNS:
-                    if needle in line:
-                        status.set(message)
-
-    try:
-        await asyncio.wait_for(_read_stream(), timeout=PIPELINE_TIMEOUT_S)
-        returncode = await proc.wait()
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        minutes = PIPELINE_TIMEOUT_S // 60
-        return _format_partial_result(
-            video_path,
-            f"⏱️ Lewat {minutes} menit, aku hentiin paksa. Yang sempat kepublish:",
-            log_path,
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            cwd=REPO_ROOT,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
         )
+        # Lets a "🛑 Stop" tap on a *different* update find this process —
+        # see handle_confirm_callback's "stop" branch. run_info is kept as
+        # a local alias so we can still read the "stopped" flag below even
+        # after clearing the module-level _ACTIVE_RUN.
+        run_info: dict[str, object] = {"key": key, "proc": proc, "stopped": False}
+        _ACTIVE_RUN = run_info
 
-    return _format_result(returncode, "\n".join(lines), "")
+        # main.py's own stdout/stderr only ever lived in an in-memory list
+        # before this — invisible to `docker compose logs` and gone forever if
+        # the process got killed on timeout. Persisting it as it streams means
+        # a run that goes wrong can actually be cross-checked afterward instead
+        # of guessed at.
+        RUN_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        log_path = RUN_LOG_DIR / f"{key}.log"
+
+        lines: list[str] = []
+
+        async def _read_stream() -> None:
+            assert proc.stdout is not None
+            with log_path.open("w", encoding="utf-8") as log_fh:
+                async for raw in proc.stdout:
+                    line = raw.decode(errors="replace").rstrip()
+                    lines.append(line)
+                    log_fh.write(line + "\n")
+                    log_fh.flush()
+
+                    pct = _GDRIVE_PCT_RE.search(line)
+                    if pct:
+                        status.set(f"☁️ Upload video HD ke Google Drive... {pct.group(1)}%")
+                        continue
+                    for needle, message in _STAGE_PATTERNS:
+                        if needle in line:
+                            status.set(message)
+
+        try:
+            await asyncio.wait_for(_read_stream(), timeout=PIPELINE_TIMEOUT_S)
+            returncode = await proc.wait()
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            minutes = PIPELINE_TIMEOUT_S // 60
+            return _format_partial_result(
+                video_path,
+                f"⏱️ Lewat {minutes} menit, aku hentiin paksa. Yang sempat kepublish:",
+                log_path,
+            )
+        finally:
+            _ACTIVE_RUN = None
+
+        if run_info["stopped"]:
+            return _format_partial_result(
+                video_path, "🛑 Dihentikan manual. Yang sempat kepublish:", log_path
+            )
+        return _format_result(returncode, "\n".join(lines), "")
 
 
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -386,6 +449,9 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             if not filename or filename == "..":
                 filename = f"{tg_video.file_unique_id}.mp4"
             local_path = INCOMING_DIR / filename
+            # Only derivable once local_path exists — attaches the 🛑 Stop
+            # button (see LiveStatus) for the rest of this dry-run.
+            status.set_stop_key(pipeline_state.video_key(local_path))
             status.set(f"Simpan {filename}...")
             await tg_file.download_to_drive(str(local_path), read_timeout=900)
 
@@ -455,29 +521,65 @@ async def _warn_if_metadata_stripped(
         log.exception("[bot] failed to send metadata warning")
 
 
-def _confirmation_text(entry: dict) -> str:
+def _selected_platforms(entry: dict) -> set[str]:
+    """Which platforms this specific pending post will go to.
+
+    Stored per-video in state.json ("selected_platforms") the first time
+    someone taps a toggle button; until then it falls back to the same
+    default main.py itself would use, so an untouched confirmation screen
+    still matches what "✅ Post" has always done.
+    """
+    stored = entry.get("selected_platforms")
+    if stored is not None:
+        return set(stored)
+    return set(config.telegram_platforms or config.platforms)
+
+
+def _confirmation_text(entry: dict, selected: set[str]) -> str:
     gemini = entry.get("gemini", {})
+    platforms_line = ", ".join(sorted(selected)) if selected else "(belum pilih platform)"
     return (
         f"📁 Folder: {gemini.get('folder', '?')}\n"
         f"📄 Nama file: {gemini.get('file_name', '?')}\n\n"
         f"📝 Caption:\n{entry.get('caption', '(kosong)')}\n\n"
-        "Lanjut posting ke semua platform?"
+        f"📤 Platform: {platforms_line}\n"
+        "(ketuk buat centang/uncentang)\n\n"
+        "Lanjut posting?"
     )
+
+
+def _confirmation_keyboard(key: str, selected: set[str]) -> InlineKeyboardMarkup:
+    # Local import, same reasoning as admin/app.py's run_page(): PLATFORM_REGISTRY
+    # lives in main.py, which this module otherwise only ever shells out to
+    # (never imports at module scope) — see _run_pipeline.
+    from main import PLATFORM_REGISTRY
+
+    toggle_buttons = [
+        InlineKeyboardButton(
+            f"{'☑️' if name in selected else '⬜'} {name}",
+            callback_data=f"toggle:{key}:{name}",
+        )
+        for name in sorted(PLATFORM_REGISTRY)
+    ]
+    rows = [toggle_buttons[i : i + 2] for i in range(0, len(toggle_buttons), 2)]
+    rows.append(
+        [
+            InlineKeyboardButton("✅ Post", callback_data=f"post:{key}"),
+            InlineKeyboardButton("✏️ Edit caption", callback_data=f"edit:{key}"),
+            InlineKeyboardButton("❌ Batal", callback_data=f"cancel:{key}"),
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
 
 
 async def _send_confirmation(message, video_path: Path) -> None:
     entry = pipeline_state.get(config.state_file, video_path)
     key = pipeline_state.video_key(video_path)
-    keyboard = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("✅ Post", callback_data=f"post:{key}"),
-                InlineKeyboardButton("✏️ Edit caption", callback_data=f"edit:{key}"),
-                InlineKeyboardButton("❌ Batal", callback_data=f"cancel:{key}"),
-            ]
-        ]
+    selected = _selected_platforms(entry)
+    await message.reply_text(
+        _confirmation_text(entry, selected),
+        reply_markup=_confirmation_keyboard(key, selected),
     )
-    await message.reply_text(_confirmation_text(entry), reply_markup=keyboard)
 
 
 async def handle_confirm_callback(
@@ -525,17 +627,67 @@ async def handle_confirm_callback(
         )
         return
 
+    if action == "toggle":
+        if not platform:
+            return
+        entry = pipeline_state.get(config.state_file, video_path)
+        selected = _selected_platforms(entry)
+        if platform in selected:
+            selected.discard(platform)
+        else:
+            selected.add(platform)
+        entry = pipeline_state.update(
+            config.state_file, video_path, {"selected_platforms": sorted(selected)}
+        )
+        try:
+            await query.edit_message_text(
+                _confirmation_text(entry, selected),
+                reply_markup=_confirmation_keyboard(key, selected),
+            )
+        except Exception:  # noqa: BLE001 — Telegram 400s on a no-op edit; harmless
+            pass
+        return
+
+    if action == "stop":
+        # query.answer() already happened, bare, right above — Telegram
+        # only accepts one answer per callback query, so feedback here has
+        # to go through a message, not a second answer(..., show_alert=True).
+        active = _ACTIVE_RUN
+        if active and active.get("key") == key:
+            active["stopped"] = True
+            active["proc"].kill()  # type: ignore[union-attr]
+        else:
+            await query.message.reply_text(
+                "Udah kelar, atau bukan proses yang lagi jalan."
+            )
+        return
+
     if action == "post":
+        entry = pipeline_state.get(config.state_file, video_path)
+        selected = _selected_platforms(entry)
+        if not selected:
+            await query.message.reply_text(
+                "⚠️ Pilih minimal satu platform dulu (ketuk salah satu tombol di atas)."
+            )
+            return
+
         await query.edit_message_text("▶️ Lanjut posting...")
         status_msg = await query.message.reply_text("⚙️ Mulai posting...")
-        async with LiveStatus(status_msg, "Bersiap posting...") as status:
+        async with LiveStatus(status_msg, "Bersiap posting...", stop_key=key) as status:
             status.set(
                 "⚙️ Mulai posting...",
                 note="Watermark → posting ke platform, biasanya 2-4 menit.",
             )
             try:
                 result = await _run_pipeline(
-                    video_path, status, extra_args=("--skip-gdrive", "--skip-gemini")
+                    video_path,
+                    status,
+                    extra_args=(
+                        "--skip-gdrive",
+                        "--skip-gemini",
+                        "--platforms",
+                        ",".join(sorted(selected)),
+                    ),
                 )
             except Exception as exc:  # noqa: BLE001 — report, don't crash the bot
                 log.exception("[bot] confirmed pipeline run crashed")
@@ -544,11 +696,17 @@ async def handle_confirm_callback(
 
         entry = pipeline_state.get(config.state_file, video_path)
         await _send_caption_recap(query.message, entry.get("caption", ""))
-        if entry.get("platforms", {}).get("tiktok", {}).get("status") != "ok":
+        if (
+            "tiktok" in selected
+            and entry.get("platforms", {}).get("tiktok", {}).get("status") != "ok"
+        ):
             # Only the manual fallback: an automated TikTok post (see
             # distributors/tiktok_remote.py) already shows up in `result`
             # above like any other platform — sending the kit on top of a
             # real success would just be confusing leftover-menu noise.
+            # "tiktok" not in `selected` means it was deliberately
+            # unticked on the confirmation screen, not that it failed —
+            # sending the manual-post kit for that would be unwanted.
             await _send_tiktok_kit(query.message, video_path)
         await _send_retry_keyboard(query.message, video_path, entry)
         return
@@ -575,7 +733,7 @@ async def handle_confirm_callback(
         except Exception:  # noqa: BLE001 — cosmetic only, never blocks the retry
             pass
         status_msg = await query.message.reply_text(f"🔁 Retry {platform}...")
-        async with LiveStatus(status_msg, f"🔁 Retry {platform}...") as status:
+        async with LiveStatus(status_msg, f"🔁 Retry {platform}...", stop_key=key) as status:
             try:
                 result = await _run_pipeline(
                     video_path,
@@ -874,7 +1032,9 @@ def main() -> None:
     app.add_handler(CommandHandler("status", handle_status))
     app.add_handler(CommandHandler("dashboard", handle_dashboard))
     app.add_handler(
-        CallbackQueryHandler(handle_confirm_callback, pattern=r"^(post|cancel|edit|retry):")
+        CallbackQueryHandler(
+            handle_confirm_callback, pattern=r"^(post|cancel|edit|retry|toggle|stop):"
+        )
     )
     app.add_handler(
         MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video)
