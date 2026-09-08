@@ -372,9 +372,19 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             tg_file = await context.bot.get_file(
                 tg_video.file_id, read_timeout=900, connect_timeout=30
             )
-            filename = (
+            raw_filename = (
                 getattr(tg_video, "file_name", None) or f"{tg_video.file_unique_id}.mp4"
             )
+            # .name strips any directory components (including "../" and
+            # absolute/drive-rooted paths) from the attacker-controlled
+            # Telegram filename, so it can't escape INCOMING_DIR. It's not
+            # quite enough on its own though: Path("..").name == ".."
+            # (pathlib doesn't special-case a bare ".." down to "" the way
+            # it does "."), which would still resolve one directory up —
+            # so that exact value has to be rejected too.
+            filename = Path(raw_filename).name
+            if not filename or filename == "..":
+                filename = f"{tg_video.file_unique_id}.mp4"
             local_path = INCOMING_DIR / filename
             status.set(f"Simpan {filename}...")
             await tg_file.download_to_drive(str(local_path), read_timeout=900)
