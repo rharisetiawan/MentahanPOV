@@ -31,15 +31,27 @@ def wait_container_finished(creation_id: str, *, timeout: int = 600) -> None:
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
-        r = requests.get(
-            graph_url(creation_id),
-            params={
-                "fields": "status_code,status",
-                "access_token": config.fb_page_access_token,
-            },
-            timeout=30,
-        )
-        r.raise_for_status()
+        try:
+            r = requests.get(
+                graph_url(creation_id),
+                params={
+                    "fields": "status_code,status",
+                    "access_token": config.fb_page_access_token,
+                },
+                timeout=30,
+            )
+            r.raise_for_status()
+        except requests.RequestException as exc:
+            # `exc`'s message embeds the full request URL, access_token
+            # included — never let it propagate as-is (it ends up in logs,
+            # state/posts.json, and Telegram chat replies). `from None`
+            # also drops it from the traceback chain so log.exception()
+            # upstream can't print it either.
+            http_status = getattr(exc.response, "status_code", None)
+            detail = f"HTTP {http_status}" if http_status is not None else type(exc).__name__
+            raise RuntimeError(
+                f"IG container {creation_id} check failed ({detail})"
+            ) from None
         status = r.json().get("status_code")
         log.info("[instagram] container %s status=%s", creation_id, status)
         if status == "FINISHED":

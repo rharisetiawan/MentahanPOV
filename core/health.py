@@ -89,8 +89,17 @@ def _debug_token(*, label: str, host: str, version: str, token: str) -> CheckRes
         )
         resp.raise_for_status()
         data = resp.json().get("data", {})
+    except requests.RequestException as exc:
+        # Never interpolate `exc` directly here: requests embeds the full
+        # request URL (including the `input_token`/`access_token` query
+        # params, i.e. the live secret) in HTTPError/ConnectionError
+        # messages, and this detail string is displayed on the dashboard,
+        # in /status, and broadcast to Telegram.
+        http_status = getattr(exc.response, "status_code", None)
+        detail = f"HTTP {http_status}" if http_status is not None else type(exc).__name__
+        return CheckResult(label, "error", f"Couldn't reach Graph API ({detail}).")
     except Exception as exc:  # noqa: BLE001
-        return CheckResult(label, "error", f"Couldn't reach Graph API: {exc}")
+        return CheckResult(label, "error", f"Couldn't reach Graph API ({type(exc).__name__}).")
 
     if not data.get("is_valid"):
         return CheckResult(label, "error", "Token reports invalid — needs a new one.")

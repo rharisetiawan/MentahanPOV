@@ -50,15 +50,24 @@ def _graph(path: str) -> str:
 def _wait_finished(creation_id: str, timeout: int = 600) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
-        r = requests.get(
-            _graph(creation_id),
-            params={
-                "fields": "status,error_message",
-                "access_token": config.threads_access_token,
-            },
-            timeout=30,
-        )
-        r.raise_for_status()
+        try:
+            r = requests.get(
+                _graph(creation_id),
+                params={
+                    "fields": "status,error_message",
+                    "access_token": config.threads_access_token,
+                },
+                timeout=30,
+            )
+            r.raise_for_status()
+        except requests.RequestException as exc:
+            # See distributors/meta_graph.py's wait_container_finished for
+            # why this can't just re-raise `exc` (URL embeds access_token).
+            http_status = getattr(exc.response, "status_code", None)
+            detail = f"HTTP {http_status}" if http_status is not None else type(exc).__name__
+            raise RuntimeError(
+                f"Threads container {creation_id} check failed ({detail})"
+            ) from None
         payload = r.json()
         status = payload.get("status")
         log.info("[threads] container %s status=%s", creation_id, status)
