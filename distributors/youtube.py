@@ -14,14 +14,13 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import config
+from core import google_auth
 
 log = logging.getLogger(__name__)
 
@@ -30,31 +29,11 @@ PLATFORM = "youtube"
 
 
 def _get_creds() -> Credentials:
-    creds: Credentials | None = None
-    token_path = config.youtube_token_file
-    secrets_path = config.youtube_client_secrets
-
-    if token_path.exists():
-        creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-
-    if creds and creds.valid:
-        return creds
-
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-    else:
-        if not secrets_path.exists():
-            raise FileNotFoundError(
-                f"YouTube client secrets not found at {secrets_path}. "
-                "See README → 'YouTube setup'."
-            )
-        flow = InstalledAppFlow.from_client_secrets_file(str(secrets_path), SCOPES)
-        # Opens browser for first-time auth, then caches token.
-        creds = flow.run_local_server(port=0)
-
-    token_path.parent.mkdir(parents=True, exist_ok=True)
-    token_path.write_text(creds.to_json(), encoding="utf-8")
-    return creds
+    return google_auth.get_credentials(
+        token_path=config.youtube_token_file,
+        secrets_path=config.youtube_client_secrets,
+        scopes=SCOPES,
+    )
 
 
 def _service() -> Any:

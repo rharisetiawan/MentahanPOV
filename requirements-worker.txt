@@ -1,0 +1,10 @@
+# Dependencies for worker_service.py, run on the separate (campus-server)
+# box that handles TikTok posting for HG680 setups that can't run
+# Playwright themselves. See DEPLOYMENT.md -> "TikTok remote worker".
+#
+# Deliberately lighter than requirements.txt: no Google/Gemini APIs,
+# no Telegram bot library (worker_service.py talks to the Bot API
+# directly over plain HTTP), no Flask.
+python-dotenv>=1.0.0
+requests>=2.31.0
+playwright>=1.42.0

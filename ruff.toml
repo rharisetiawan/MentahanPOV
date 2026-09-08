@@ -1,0 +1,13 @@
+target-version = "py310"
+line-length = 88
+
+[lint]
+select = ["E", "F", "I", "UP", "B"]
+# BLE001 (blind except Exception) is used deliberately in cleanup/error-
+# reporting paths — see CONTRIBUTING.md "Error handling philosophy".
+# Enable it locally with `ruff check --select BLE` if you want to audit
+# those spots specifically.
+ignore = ["E501"]
+
+[lint.isort]
+known-first-party = ["core", "distributors", "config"]

@@ -88,3 +88,18 @@ def mark_platform(
 def already_succeeded(state_file: Path, video_path: Path, platform: str) -> bool:
     entry = get(state_file, video_path)
     return entry.get("platforms", {}).get(platform, {}).get("status") == "ok"
+
+
+def video_path_for_key(state_file: Path, key: str) -> Path | None:
+    """Reverse lookup: state key -> the video path it was recorded under.
+
+    Used by telegram_bot.py's confirm/edit/cancel flow — a button's
+    callback_data only has room for the short key, not a full path, so a
+    tap has to look the real path back up here rather than carrying it.
+    """
+    with _LOCK:
+        data = _load(state_file)
+    entry = data.get(key)
+    if not entry or "video_path" not in entry:
+        return None
+    return Path(entry["video_path"])
