@@ -16,6 +16,7 @@ import argparse
 import logging
 import sys
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from config import config
@@ -57,6 +58,14 @@ NEEDS_POST_URL = {"instagram", "threads"} | (
 )
 NEEDS_STORY_URL = {"instagram_story"}
 STORY_PLATFORMS = {"facebook_story", "instagram_story"}
+
+# distributors/tiktok.py drives a local Playwright browser (sync API),
+# which only works from the thread that launched it — keep that one off
+# the thread pool below. Everything else, tiktok_remote.py's HTTP hop to
+# the worker box included, is a plain `requests` call with no such
+# constraint, so it's safe (and worth it: these are network-bound, not
+# CPU-bound, so overlapping them is close to free even on weak hardware).
+MAIN_THREAD_ONLY_PLATFORMS = set() if config.tiktok_worker_host else {"tiktok"}
 
 
 def setup_logging(verbose: bool) -> None:
@@ -245,15 +254,7 @@ def step_distribute(
     platforms: list[str],
     force: bool,
 ) -> None:
-    for name in platforms:
-        if name not in PLATFORM_REGISTRY:
-            log.error("[%s] unknown platform, skipping", name)
-            continue
-        if not force and state.already_succeeded(config.state_file, video, name):
-            log.info(
-                "[%s] already posted previously; skipping (use --force to repost)", name
-            )
-            continue
+    def _post_one(name: str) -> None:
         try:
             log.info("[%s] posting…", name)
             upload = story_video if name in STORY_PLATFORMS else post_video
@@ -279,6 +280,31 @@ def step_distribute(
                 url=None,
                 error=f"{type(exc).__name__}: {exc}",
             )
+
+    to_run: list[str] = []
+    for name in platforms:
+        if name not in PLATFORM_REGISTRY:
+            log.error("[%s] unknown platform, skipping", name)
+            continue
+        if not force and state.already_succeeded(config.state_file, video, name):
+            log.info(
+                "[%s] already posted previously; skipping (use --force to repost)", name
+            )
+            continue
+        to_run.append(name)
+
+    # Each of these is a separate account/API, so one platform's upload
+    # doesn't have to wait on another's — see MAIN_THREAD_ONLY_PLATFORMS
+    # above for why local TikTok is the one exception.
+    parallel = [n for n in to_run if n not in MAIN_THREAD_ONLY_PLATFORMS]
+    sequential = [n for n in to_run if n in MAIN_THREAD_ONLY_PLATFORMS]
+
+    if parallel:
+        with ThreadPoolExecutor(max_workers=len(parallel)) as pool:
+            for f in [pool.submit(_post_one, name) for name in parallel]:
+                f.result()
+    for name in sequential:
+        _post_one(name)
 
 
 def main() -> int:
