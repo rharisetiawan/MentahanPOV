@@ -5,8 +5,8 @@
   <h2>Telegram bot <span id="status-badge" class="badge {{ 'running' if status.running else 'stopped' }}">{{ 'running' if status.running else 'stopped' }}</span></h2>
   <p class="muted">Container <code>mentahanpov-bot</code> (docker compose). Tutup tab ini gak menghentikan bot-nya.</p>
   <div class="actions">
-    <form method="post" action="{{ url_for('bot_start') }}"><button type="submit" id="start-btn" {{ 'disabled' if status.running }}>Start</button></form>
-    <form method="post" action="{{ url_for('bot_stop') }}"><button type="submit" id="stop-btn" class="danger" {{ 'disabled' if not status.running }}>Stop</button></form>
+    <form method="post" action="{{ url_for('bot_start') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" id="start-btn" {{ 'disabled' if status.running }}>Start</button></form>
+    <form method="post" action="{{ url_for('bot_stop') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" id="stop-btn" class="danger" {{ 'disabled' if not status.running }}>Stop</button></form>
   </div>
 </div>
 <div class="card">
@@ -17,6 +17,7 @@
     soalnya container gak baca ulang <code>.env</code> sendiri.
   </p>
   <form method="post" action="{{ url_for('bot_apply') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit">Terapkan (docker compose up -d)</button>
   </form>
 </div>

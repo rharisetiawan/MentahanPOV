@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 from functools import wraps
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from flask import (
     request,
     url_for,
 )
+from flask_wtf import CSRFProtect
 from werkzeug.utils import secure_filename
 
 from config import config as pipeline_config
@@ -69,6 +71,12 @@ def _credential_fields(sections: list[env_schema.Section]) -> list[tuple[str, st
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    # Random per-process key: only used to sign the session cookie that
+    # holds the CSRF token (and to make flash() work) — this is a single
+    # threaded process (see admin.py's app.run(...)), not a multi-worker
+    # deployment, so a stable/persisted key isn't needed.
+    app.secret_key = secrets.token_hex(32)
+    CSRFProtect(app)
 
     def require_auth(view):
         @wraps(view)
@@ -107,6 +115,14 @@ def create_app() -> Flask:
             for f in env_schema.all_fields(sections):
                 if f.kind == "bool":
                     values[f.key] = "true" if request.form.get(f.key) else "false"
+                elif f.kind == "secret":
+                    # The form never echoes the real value back (see
+                    # config.html), so a blank submission means "leave it
+                    # alone", not "clear it" — only a non-empty value
+                    # replaces what's stored.
+                    new_val = request.form.get(f.key, "").strip()
+                    if new_val:
+                        values[f.key] = new_val
                 elif f.key in request.form:
                     values[f.key] = request.form.get(f.key, "").strip()
             env_store.write(ENV_FILE, sections, values)

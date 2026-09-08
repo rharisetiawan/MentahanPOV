@@ -8,6 +8,7 @@
   diatur di tab <a href="{{ url_for('credentials_page') }}">Credentials</a>.
 </p>
 <form method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   {% for section in sections %}
   <div class="card">
     <h2>{{ section.title }}</h2>
@@ -21,11 +22,9 @@
           <label for="{{ f.key }}" style="font-weight:normal;margin:0">aktif</label>
         </div>
       {% elif f.kind == "secret" %}
-        <div class="secret-row">
-          <input type="password" id="{{ f.key }}" name="{{ f.key }}"
-                 value="{{ values.get(f.key, f.default) }}" autocomplete="off">
-          <button type="button" class="secondary small toggle-secret" data-target="{{ f.key }}">👁</button>
-        </div>
+        <input type="password" id="{{ f.key }}" name="{{ f.key }}" value=""
+               autocomplete="off"
+               placeholder="{{ '•••••••• (tersimpan — isi buat ganti, kosongkan biar gak berubah)' if values.get(f.key) else '(belum diisi)' }}">
       {% else %}
         <input type="text" id="{{ f.key }}" name="{{ f.key }}"
                value="{{ values.get(f.key, f.default) }}" autocomplete="off">
@@ -39,13 +38,4 @@
     <button type="submit">Simpan .env</button>
   </div>
 </form>
-
-<script>
-document.querySelectorAll(".toggle-secret").forEach(function (btn) {
-  btn.addEventListener("click", function () {
-    var input = document.getElementById(btn.dataset.target);
-    input.type = input.type === "password" ? "text" : "password";
-  });
-});
-</script>
 {% endblock %}

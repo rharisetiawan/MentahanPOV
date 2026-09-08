@@ -4,6 +4,7 @@
 <div class="card">
   <h2>Jalankan pipeline <span id="status-badge" class="badge {{ 'running' if status.running else 'stopped' }}">{{ 'running' if status.running else 'stopped' }}</span></h2>
   <form method="post" action="{{ url_for('run_start') }}" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="field">
       <label>Upload video</label>
       <input type="file" name="video" accept="video/*">
@@ -32,6 +33,7 @@
     </div>
   </form>
   <form method="post" action="{{ url_for('run_stop') }}" style="margin-top:0.6rem">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit" id="stop-btn" class="danger" {{ 'disabled' if not status.running }}>Stop</button>
   </form>
 </div>
