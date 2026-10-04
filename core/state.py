@@ -36,6 +36,12 @@ def _save(state_file: Path, data: dict[str, Any]) -> None:
     tmp.replace(state_file)
 
 
+def load_all(state_file: Path) -> dict[str, Any]:
+    """Snapshot of every entry, keyed by video key (read-only use)."""
+    with _LOCK:
+        return _load(state_file)
+
+
 def get(state_file: Path, video_path: Path) -> dict[str, Any]:
     with _LOCK:
         data = _load(state_file)

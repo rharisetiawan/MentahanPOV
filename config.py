@@ -22,6 +22,16 @@ def _env(key: str, default: str | None = None, *, required: bool = False) -> str
     return val or ""
 
 
+def _tiktok_enabled() -> bool:
+    # Temporarily off by default: the automated TikTok hop keeps timing out.
+    # Set TIKTOK_ENABLED=true in .env to bring it back.
+    return _env("TIKTOK_ENABLED", "false").lower() == "true"
+
+
+def _drop_disabled(platforms: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(p for p in platforms if p != "tiktok" or _tiktok_enabled())
+
+
 @dataclass(frozen=True)
 class Config:
     # GDrive (OAuth2 installed-app — reuses the YouTube client secrets below,
@@ -141,6 +151,7 @@ class Config:
 
     # TikTok — local Playwright (distributors/tiktok.py), for runs started
     # by hand on a desktop that actually has Chromium available.
+    tiktok_enabled: bool = field(default_factory=_tiktok_enabled)
     tiktok_storage_state: Path = field(
         default_factory=lambda: Path(
             _env("TIKTOK_STORAGE_STATE", "./credentials/tiktok-storage.json")
@@ -189,8 +200,12 @@ class Config:
     # Optional override of --platforms for bot-triggered runs. Empty = use
     # main.py's own PLATFORMS default.
     telegram_platforms: tuple[str, ...] = field(
-        default_factory=lambda: tuple(
-            p.strip() for p in _env("TELEGRAM_PLATFORMS", "").split(",") if p.strip()
+        default_factory=lambda: _drop_disabled(
+            tuple(
+                p.strip()
+                for p in _env("TELEGRAM_PLATFORMS", "").split(",")
+                if p.strip()
+            )
         )
     )
     # From https://my.telegram.org -> API development tools. Only needed to
@@ -206,19 +221,21 @@ class Config:
 
     # Orchestration
     platforms: tuple[str, ...] = field(
-        default_factory=lambda: tuple(
-            p.strip()
-            for p in _env(
-                "PLATFORMS",
-                # TikTok and Threads are opt-in: TikTok needs a one-off
-                # Playwright login, Threads needs its own separately-issued
-                # access token — listing either before that setup is done
-                # makes every run report a failure. Add "threads" here (or
-                # to TELEGRAM_PLATFORMS) once THREADS_USER_ID/ACCESS_TOKEN
-                # are set.
-                "youtube,facebook,instagram,facebook_story,instagram_story",
-            ).split(",")
-            if p.strip()
+        default_factory=lambda: _drop_disabled(
+            tuple(
+                p.strip()
+                for p in _env(
+                    "PLATFORMS",
+                    # TikTok and Threads are opt-in: TikTok needs a one-off
+                    # Playwright login, Threads needs its own separately-issued
+                    # access token — listing either before that setup is done
+                    # makes every run report a failure. Add "threads" here (or
+                    # to TELEGRAM_PLATFORMS) once THREADS_USER_ID/ACCESS_TOKEN
+                    # are set.
+                    "youtube,facebook,instagram,facebook_story,instagram_story",
+                ).split(",")
+                if p.strip()
+            )
         )
     )
     state_file: Path = field(
@@ -247,6 +264,29 @@ class Config:
     # out. See telegram_bot.py's job_queue.run_daily.
     daily_status_hour: int = field(
         default_factory=lambda: int(_env("DAILY_STATUS_HOUR", "8"))
+    )
+
+    # Automatic disk cleanup (core/cleanup.py): finished jobs older than this
+    # many days lose their master in incoming/ and their posting copies.
+    cleanup_retention_days: int = field(
+        default_factory=lambda: int(_env("CLEANUP_RETENTION_DAYS", "3"))
+    )
+    # Platforms whose "error" does NOT block cleanup. TikTok is a manual
+    # hand-off, so its status never means "still needs a retry".
+    cleanup_ignore_platforms: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            p.strip()
+            for p in _env("CLEANUP_IGNORE_PLATFORMS", "tiktok").split(",")
+            if p.strip()
+        )
+    )
+    # Disk-space alert thresholds (% free) used by core/health.py and the
+    # daily Telegram report. The partition is small, so warn early.
+    disk_warn_free_pct: float = field(
+        default_factory=lambda: float(_env("DISK_WARN_FREE_PCT", "25"))
+    )
+    disk_error_free_pct: float = field(
+        default_factory=lambda: float(_env("DISK_ERROR_FREE_PCT", "12"))
     )
 
     # Admin dashboard (admin.py) — the read-write sibling of dashboard.py

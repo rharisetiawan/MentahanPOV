@@ -51,6 +51,11 @@ PLATFORM_REGISTRY: dict[str, Callable[..., dict[str, str]]] = {
     "instagram_story": instagram_story.post,
 }
 
+# TikTok switched off (TIKTOK_ENABLED=false): hide it everywhere that lists
+# PLATFORM_REGISTRY (Telegram toggles, admin run page, --platforms).
+if not config.tiktok_enabled:
+    PLATFORM_REGISTRY.pop("tiktok", None)
+
 # Platforms that publish by handing a URL to the platform instead of
 # uploading bytes — these force an upload of the watermarked copy.
 NEEDS_POST_URL = {"instagram", "threads"} | (

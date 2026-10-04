@@ -52,7 +52,7 @@ from telegram.ext import (
 )
 
 from config import config
-from core import health, video_facts
+from core import cleanup, health, video_facts
 from core import state as pipeline_state
 
 # The HG680 doesn't necessarily run in the same timezone the daily report
@@ -933,6 +933,68 @@ async def daily_status_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             log.exception("[bot] failed to send daily status to %s", user_id)
 
 
+def _run_cleanup(*, apply: bool) -> tuple[int, int]:
+    candidates = cleanup.plan(
+        config.state_file,
+        retention_days=config.cleanup_retention_days,
+        ignore_platforms=config.cleanup_ignore_platforms,
+        allowed_roots=[INCOMING_DIR, config.posting_copy_dir],
+        posting_copy_dir=config.posting_copy_dir,
+    )
+    if not apply:
+        return len(candidates), sum(c.size for c in candidates)
+    return cleanup.apply(candidates)
+
+
+async def daily_cleanup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    files, freed = await asyncio.to_thread(_run_cleanup, apply=True)
+    log.info("[bot] cleanup: deleted %d files, freed %.2f GB", files, freed / 1024**3)
+    if not files:
+        return
+    text = f"🧹 Cleanup harian: {files} file lama dihapus, {freed / 1024**3:.2f} GB bebas."
+    for user_id in config.telegram_allowed_user_ids:
+        try:
+            await context.bot.send_message(chat_id=user_id, text=text)
+        except Exception:  # noqa: BLE001
+            log.exception("[bot] failed to send cleanup report to %s", user_id)
+
+
+async def disk_watch_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Every few hours: speak up only when the disk is getting tight."""
+    result = await asyncio.to_thread(health.check_disk_space)
+    if result.status == "ok":
+        return
+    text = (
+        f"{result.emoji} Disk server: {result.detail}\n"
+        "Kirim /cleanup buat hapus video lama yang sudah selesai."
+    )
+    for user_id in config.telegram_allowed_user_ids:
+        try:
+            await context.bot.send_message(chat_id=user_id, text=text)
+        except Exception:  # noqa: BLE001
+            log.exception("[bot] failed to send disk alert to %s", user_id)
+
+
+async def cleanup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/cleanup shows what would go; /cleanup apply actually deletes it."""
+    if update.message is None or update.effective_user is None:
+        return
+    if not _allowed(update.effective_user.id):
+        return
+    apply = bool(context.args) and context.args[0].lower() == "apply"
+    files, size = await asyncio.to_thread(_run_cleanup, apply=apply)
+    gb = size / 1024**3
+    if apply:
+        await update.message.reply_text(f"🧹 {files} file dihapus, {gb:.2f} GB bebas.")
+    elif files:
+        await update.message.reply_text(
+            f"🧹 {files} file ({gb:.2f} GB) aman dihapus (selesai & lebih dari "
+            f"{config.cleanup_retention_days} hari).\nKirim /cleanup apply buat menghapus."
+        )
+    else:
+        await update.message.reply_text("🧹 Tidak ada yang perlu dihapus.")
+
+
 async def handle_other(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
@@ -971,6 +1033,7 @@ async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> No
 _BOT_COMMANDS = [
     BotCommand("status", "Cek status integrasi (Gemini, Drive, YouTube, Meta, Threads)"),
     BotCommand("dashboard", "Link ke admin dashboard (edit token, kontrol bot)"),
+    BotCommand("cleanup", "Hapus video lama yang sudah selesai (tambah 'apply')"),
 ]
 
 
@@ -1031,6 +1094,7 @@ def main() -> None:
     # first match wins, and filters.ALL matches everything else does too.
     app.add_handler(CommandHandler("status", handle_status))
     app.add_handler(CommandHandler("dashboard", handle_dashboard))
+    app.add_handler(CommandHandler("cleanup", cleanup_command))
     app.add_handler(
         CallbackQueryHandler(
             handle_confirm_callback, pattern=r"^(post|cancel|edit|retry|toggle|stop):"
@@ -1045,7 +1109,13 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL, handle_other))
     app.add_error_handler(handle_error)
 
+    # Runs regardless of the allowlist: freeing disk shouldn't depend on
+    # having someone to report to (the reports just skip when it's empty).
+    app.job_queue.run_daily(
+        daily_cleanup_job, time=datetime.time(hour=4, tzinfo=_REPORT_TZ)
+    )
     if config.telegram_allowed_user_ids:
+        app.job_queue.run_repeating(disk_watch_job, interval=6 * 3600, first=300)
         app.job_queue.run_daily(
             daily_status_job,
             time=datetime.time(hour=config.daily_status_hour, tzinfo=_REPORT_TZ),

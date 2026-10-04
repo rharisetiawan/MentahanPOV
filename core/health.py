@@ -179,9 +179,12 @@ def check_gemini_fallback() -> CheckResult:
 
 
 def check_disk_space() -> CheckResult:
-    """incoming/ and state/posting_copies/ only ever grow — nothing in this
-    pipeline deletes old videos automatically. On a board with a small SD
-    card/eMMC, that's the quiet way a run eventually fails with ENOSPC.
+    """Free space on the partition holding state/ (and incoming/).
+
+    core/cleanup.py prunes finished jobs daily, but if a job keeps failing
+    its files are kept for retry, so this is the backstop: on a board with a
+    small SD card/eMMC, a full disk fails runs with ENOSPC and takes Docker
+    down with it. Thresholds come from DISK_WARN_FREE_PCT/DISK_ERROR_FREE_PCT.
     """
     import shutil
 
@@ -192,11 +195,13 @@ def check_disk_space() -> CheckResult:
 
     free_pct = usage.free / usage.total * 100
     free_gb = usage.free / (1024**3)
-    if free_pct < 10:
+    if free_pct < config.disk_error_free_pct:
         return CheckResult(
-            "Disk space", "error", f"Only {free_gb:.1f}GB free ({free_pct:.0f}%)."
+            "Disk space",
+            "error",
+            f"Only {free_gb:.1f}GB free ({free_pct:.0f}%) — run cleanup / free space now.",
         )
-    if free_pct < 20:
+    if free_pct < config.disk_warn_free_pct:
         return CheckResult(
             "Disk space", "warning", f"{free_gb:.1f}GB free ({free_pct:.0f}%) — getting low."
         )

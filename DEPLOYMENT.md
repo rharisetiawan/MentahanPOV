@@ -465,3 +465,29 @@ means the connection was actually lost or the worker box is unreachable
 anymore. Check `journalctl --user -u mentahanpov-tiktok-worker -f` on
 the campus server and confirm both boxes still show each other in
 `tailscale status`.
+
+## Disk space cleanup
+
+`incoming/` (Telegram masters) and `state/posting_copies/` (`*_post.mp4`,
+`*_story.mp4`) used to grow forever. On the HG680's small `/www` USB
+partition that ended at 0 bytes free on 2026-10-04, which also stopped Docker
+(and with it Tailscale and the bot).
+
+Now handled inside the bot (`core/cleanup.py`, no host cron needed):
+
+- **Daily 04:00 WIB** the bot deletes a job's master and posting copies when
+  the master is on Drive, every platform except `CLEANUP_IGNORE_PLATFORMS`
+  (default `tiktok`) is `ok`, and the entry is older than
+  `CLEANUP_RETENTION_DAYS` (default 3). Jobs with a failed platform are kept
+  so they can still be retried. Telegram gets a one-line report when files
+  were deleted.
+- **`/cleanup`** in Telegram previews what would go; **`/cleanup apply`**
+  deletes it on demand.
+- **Disk alert**: every 6 h the bot messages the allowlisted users when free
+  space drops under `DISK_WARN_FREE_PCT` (25%) / `DISK_ERROR_FREE_PCT` (12%).
+  `/status` shows the same check.
+
+Not covered: the `telegram-bot-api-data` Docker volume (the Local Bot API
+keeps its own copy of every download) and Docker images/build cache. Check
+with `docker system df` and `docker builder prune -f`; moving
+`/www/docker` or the storage dirs to a bigger disk is the lasting fix.
