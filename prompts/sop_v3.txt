@@ -12,6 +12,8 @@ round them. They were extracted from the file itself, not from you:
 - Available Drive folders (pick exactly ONE, copy the name verbatim):
 {{FOLDERS_LIST}}
 
+{{TOP_HOOKS_BLOCK}}
+
 TASK
 1. Watch AND listen to the video. Identify its core visual/audio "vibe"
    and the single most interesting detail in it — an unexpected sound, a

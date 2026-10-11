@@ -25,6 +25,14 @@ so a wrong upload or a bad caption can be caught before anything actually
 goes out. Confirming resumes with `--skip-gdrive --skip-gemini` so none of
 that dry-run work is repeated. See handle_video, handle_confirm_callback,
 and handle_text_reply.
+
+Beyond that, the bot also owns the box's housekeeping, because it's the one
+long-running process there: a heartbeat + disk-pressure tick
+(housekeeping_job), automatic cleanup of finished/abandoned videos
+(core/cleanup.py; /cleanup), scheduled posts that survive a restart
+(📅 Jadwalkan, /jadwal), post performance collection (/insights), and a
+"back online after X" message on startup. Commands: /status, /dashboard,
+/cleanup, /jadwal, /insights.
 """
 
 from __future__ import annotations
@@ -52,7 +60,15 @@ from telegram.ext import (
 )
 
 from config import config
-from core import cleanup, health, video_facts
+from core import (
+    cleanup,
+    debug_artifacts,
+    health,
+    heartbeat,
+    insights,
+    video_facts,
+)
+from core import schedule as schedule_lib
 from core import state as pipeline_state
 
 # The HG680 doesn't necessarily run in the same timezone the daily report
@@ -77,6 +93,11 @@ STATUS_TICK_S = 5  # seconds between status redraws (Telegram edit-rate safe)
 
 _FINAL_STATE_RE = re.compile(r"Final state: (\{.*\})\s*$")
 _GDRIVE_PCT_RE = re.compile(r"\[gdrive\] (\d+)%")
+# main.py logs one of these when a platform has real credentials configured
+# but wasn't in this run's platform list — the exact "set up but nothing
+# ever posts there" symptom, previously silent. Surfaced here so it reaches
+# the chat instead of only sitting in the run log file.
+_CONFIG_CHECK_RE = re.compile(r"\[config-check\]\s*(.+)$")
 
 # Substring -> friendly status text. Checked in order against every log
 # line as it streams in; the last match found "wins" as the current stage.
@@ -117,6 +138,10 @@ def _allowed(user_id: int) -> bool:
 # just routing state for a human typing a reply within the next message or
 # two, not something that needs to survive a restart.
 _PENDING_EDIT: dict[int, str] = {}
+# Same idea for "✍️ Ketik jam": chat_id -> state key, so the next plain-text
+# message from that chat is parsed as a posting time (core/schedule.py).
+_PENDING_SCHEDULE: dict[int, str] = {}
+
 
 # Only one main.py subprocess runs at a time, across every chat — the
 # HG680 this normally runs on is weak enough that two pipelines fighting
@@ -134,15 +159,32 @@ _PIPELINE_LOCK = asyncio.Lock()
 _ACTIVE_RUN: dict[str, object] | None = None
 
 
+def _config_check_notes(text: str) -> list[str]:
+    """Pull out main.py's "configured but not selected" warnings, deduped."""
+    seen: list[str] = []
+    for line in text.splitlines():
+        m = _CONFIG_CHECK_RE.search(line)
+        if m and m.group(1) not in seen:
+            seen.append(m.group(1))
+    return seen
+
+
 def _format_result(returncode: int, stdout: str, stderr: str) -> str:
     # main.py's logging.basicConfig() defaults to stderr, not stdout — the
     # "Final state: {...}" summary line lives there, so both must be
     # searched (or it's silently "not found" even on a full success).
+    full = stdout + "\n" + stderr
     match = None
-    for line in (stdout + "\n" + stderr).splitlines():
+    for line in full.splitlines():
         m = _FINAL_STATE_RE.search(line)
         if m:
             match = m
+    notes = _config_check_notes(full)
+    notes_block = (
+        "\n\n⚠️ Catatan konfigurasi:\n" + "\n".join(f"- {n}" for n in notes)
+        if notes
+        else ""
+    )
     if match:
         try:
             platforms = ast.literal_eval(match.group(1))
@@ -156,12 +198,15 @@ def _format_result(returncode: int, stdout: str, stderr: str) -> str:
                 else:
                     lines.append(f"❌ {name}: {info.get('error')}")
             header = "🎉 Selesai!" if returncode == 0 else "⚠️ Selesai dengan error:"
-            return header + "\n" + "\n".join(lines)
+            return header + "\n" + "\n".join(lines) + notes_block
 
     # Fallback: couldn't find/parse the summary line — dump the tail.
     tail = (stdout[-1500:] + "\n" + stderr[-1000:]).strip()
     status = "selesai" if returncode == 0 else f"gagal (exit {returncode})"
-    return f"Proses {status}, tapi gak nemu ringkasan hasil. Log terakhir:\n```\n{tail}\n```"
+    return (
+        f"Proses {status}, tapi gak nemu ringkasan hasil. Log terakhir:\n"
+        f"```\n{tail}\n```{notes_block}"
+    )
 
 
 def _format_partial_result(video_path: Path, header: str, log_path: Path) -> str:
@@ -188,6 +233,13 @@ def _format_partial_result(video_path: Path, header: str, log_path: Path) -> str
             lines.append(f"❔ belum sempat dicoba: {', '.join(pending)}")
     else:
         lines.append("Belum ada platform yang sempat selesai diproses.")
+    try:
+        notes = _config_check_notes(log_path.read_text(encoding="utf-8"))
+    except OSError:
+        notes = []
+    if notes:
+        lines.append("\n⚠️ Catatan konfigurasi:")
+        lines.extend(f"- {n}" for n in notes)
     lines.append(f"\nLog lengkap: {log_path}")
     return "\n".join(lines)
 
@@ -416,6 +468,13 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     size_mb = (getattr(tg_video, "file_size", 0) or 0) / 1048576
     size_note = f"{size_mb:.0f} MB" if size_mb else "ukuran belum diketahui"
+
+    # Refuse up front, with a reason, rather than let the download fill the
+    # disk and die half-written (which also leaves a corrupt file in
+    # incoming/ that nothing would ever clean up).
+    if not await _ensure_disk_room(update.message, size_mb):
+        return
+
     status_msg = await update.message.reply_text("📥 Video diterima...")
 
     # The clock starts before get_file, not after: with a Local Bot API
@@ -565,6 +624,11 @@ def _confirmation_keyboard(key: str, selected: set[str]) -> InlineKeyboardMarkup
     rows.append(
         [
             InlineKeyboardButton("✅ Post", callback_data=f"post:{key}"),
+            InlineKeyboardButton("📅 Jadwalkan", callback_data=f"sched:{key}"),
+        ]
+    )
+    rows.append(
+        [
             InlineKeyboardButton("✏️ Edit caption", callback_data=f"edit:{key}"),
             InlineKeyboardButton("❌ Batal", callback_data=f"cancel:{key}"),
         ]
@@ -612,6 +676,8 @@ async def handle_confirm_callback(
 
     if action == "cancel":
         _PENDING_EDIT.pop(query.message.chat_id, None)
+        _PENDING_SCHEDULE.pop(query.message.chat_id, None)
+        await _clear_schedule(context.application, key, video_path)
         try:
             if video_path.exists():
                 video_path.unlink()
@@ -621,6 +687,7 @@ async def handle_confirm_callback(
         return
 
     if action == "edit":
+        _PENDING_SCHEDULE.pop(query.message.chat_id, None)
         _PENDING_EDIT[query.message.chat_id] = key
         await query.edit_message_text(
             "✏️ Kirim caption baru sebagai balasan (teks biasa)."
@@ -671,48 +738,21 @@ async def handle_confirm_callback(
             )
             return
 
-        await query.edit_message_text("▶️ Lanjut posting...")
-        status_msg = await query.message.reply_text("⚙️ Mulai posting...")
-        async with LiveStatus(status_msg, "Bersiap posting...", stop_key=key) as status:
-            status.set(
-                "⚙️ Mulai posting...",
-                note="Watermark → posting ke platform, biasanya 2-4 menit.",
-            )
-            try:
-                result = await _run_pipeline(
-                    video_path,
-                    status,
-                    extra_args=(
-                        "--skip-gdrive",
-                        "--skip-gemini",
-                        "--platforms",
-                        ",".join(sorted(selected)),
-                    ),
-                )
-            except Exception as exc:  # noqa: BLE001 — report, don't crash the bot
-                log.exception("[bot] confirmed pipeline run crashed")
-                result = f"💥 Error gak terduga: {type(exc).__name__}: {exc}"
-            await status.finish(result)
+        if not video_path.exists():
+            await query.edit_message_text(_missing_video_text())
+            return
 
-        entry = pipeline_state.get(config.state_file, video_path)
-        await _send_caption_recap(query.message, entry.get("caption", ""))
-        if (
-            "tiktok" in selected
-            and entry.get("platforms", {}).get("tiktok", {}).get("status") != "ok"
-        ):
-            # Only the manual fallback: an automated TikTok post (see
-            # distributors/tiktok_remote.py) already shows up in `result`
-            # above like any other platform — sending the kit on top of a
-            # real success would just be confusing leftover-menu noise.
-            # "tiktok" not in `selected` means it was deliberately
-            # unticked on the confirmation screen, not that it failed —
-            # sending the manual-post kit for that would be unwanted.
-            await _send_tiktok_kit(query.message, video_path)
-        await _send_retry_keyboard(query.message, video_path, entry)
+        # Posting now supersedes any schedule this video had.
+        await _clear_schedule(context.application, key, video_path)
+        await query.edit_message_text("▶️ Lanjut posting...")
+        await _execute_post(query.message, key, video_path, selected)
         return
 
     if action == "retry":
         if not platform:
+            return
+        if not video_path.exists():
+            await query.message.reply_text(_missing_video_text())
             return
         # Remove just the tapped button (not the whole keyboard — a
         # message can offer retries for several failed platforms at once,
@@ -753,8 +793,137 @@ async def handle_confirm_callback(
 
         entry = pipeline_state.get(config.state_file, video_path)
         await _send_caption_recap(query.message, entry.get("caption", ""))
+        if (
+            platform == "tiktok"
+            and entry.get("platforms", {}).get("tiktok", {}).get("status") != "ok"
+        ):
+            await _send_tiktok_debug(query.message, key)
         await _send_retry_keyboard(query.message, video_path, entry)
+        await _after_run()
         return
+
+
+def _missing_video_text() -> str:
+    days = getattr(config, "abandoned_retention_days", 0)
+    why = (
+        f"kemungkinan dibersihkan otomatis karena lebih dari {days} hari gak "
+        "dikonfirmasi"
+        if days > 0
+        else "kemungkinan sudah dibatalkan atau dihapus"
+    )
+    return (
+        f"⚠️ File video-nya sudah gak ada di server — {why} "
+        "(master-nya tetap aman di Google Drive). Kirim ulang videonya."
+    )
+
+
+async def _execute_post(
+    message, key: str, video_path: Path, selected: set[str]
+) -> None:
+    """Run the confirmed post and report back, as replies to `message`.
+
+    One implementation for every way a post starts — the ✅ Post button and
+    a scheduled job (which has no callback query, only a chat to write to).
+    """
+    # Record the choice explicitly: until someone toggles a platform the
+    # selection exists only as a *default* computed on the fly, and
+    # core/cleanup.py needs the real list to tell "finished" from "still
+    # running" (a parallel run records platforms one at a time).
+    pipeline_state.update(
+        config.state_file, video_path, {"selected_platforms": sorted(selected)}
+    )
+
+    status_msg = await message.reply_text("⚙️ Mulai posting...")
+    async with LiveStatus(status_msg, "Bersiap posting...", stop_key=key) as status:
+        status.set(
+            "⚙️ Mulai posting...",
+            note="Watermark → posting ke platform, biasanya 2-4 menit.",
+        )
+        try:
+            result = await _run_pipeline(
+                video_path,
+                status,
+                extra_args=(
+                    "--skip-gdrive",
+                    "--skip-gemini",
+                    "--platforms",
+                    ",".join(sorted(selected)),
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 — report, don't crash the bot
+            log.exception("[bot] confirmed pipeline run crashed")
+            result = f"💥 Error gak terduga: {type(exc).__name__}: {exc}"
+        await status.finish(result)
+
+    entry = pipeline_state.get(config.state_file, video_path)
+    await _send_caption_recap(message, entry.get("caption", ""))
+    if (
+        "tiktok" in selected
+        and entry.get("platforms", {}).get("tiktok", {}).get("status") != "ok"
+    ):
+        # Only the manual fallback: an automated TikTok post (see
+        # distributors/tiktok_remote.py) already shows up in `result`
+        # above like any other platform — sending the kit on top of a
+        # real success would just be confusing leftover-menu noise.
+        # "tiktok" not in `selected` means it was deliberately
+        # unticked on the confirmation screen, not that it failed —
+        # sending the manual-post kit for that would be unwanted.
+        #
+        # The screenshot goes first: it says *why* it failed, which is
+        # the thing worth reading before deciding to post by hand.
+        await _send_tiktok_debug(message, key)
+        await _send_tiktok_kit(message, video_path)
+    await _send_retry_keyboard(message, video_path, entry)
+    await _after_run()
+
+
+async def _after_run() -> None:
+    """Housekeeping once a run is over: drop uncollected screenshots and let
+    cleanup reclaim whatever that run just made safe to delete. Never raises
+    — a failure here must not look like the post itself failed."""
+    try:
+        debug_artifacts.prune()
+        if config.auto_cleanup and not _PIPELINE_LOCK.locked():
+            report = await asyncio.to_thread(cleanup.run, apply_changes=True)
+            if report.deleted:
+                log.info(
+                    "[bot] post-run cleanup freed %s (%d file(s))",
+                    cleanup.fmt_bytes(report.freed_bytes),
+                    report.deleted,
+                )
+    except Exception:  # noqa: BLE001
+        log.exception("[bot] post-run housekeeping failed")
+
+
+async def _send_tiktok_debug(message, key: str) -> None:
+    """Show the page TikTok Studio was actually displaying when it failed.
+
+    The worker attaches a screenshot to its error (worker_service.py) and
+    main.py parks it (core/debug_artifacts.py). This used to need an SSH
+    session on the campus box just to find out which popup was in the way.
+    """
+    path = debug_artifacts.take(key, "tiktok")
+    if path is None:
+        return
+    caption = (
+        "📸 Ini yang kelihatan di TikTok Studio waktu gagal — "
+        "cek ada popup/perubahan layout apa."
+    )
+    try:
+        try:
+            with path.open("rb") as fh:
+                await message.reply_photo(photo=fh, caption=caption)
+        except telegram_error.BadRequest:
+            # Photos have a size/aspect limit that a tall full-page capture
+            # can exceed; as a document it's always accepted.
+            with path.open("rb") as fh:
+                await message.reply_document(
+                    document=fh, filename=path.name, caption=caption
+                )
+    except Exception:  # noqa: BLE001 — the post result already went out
+        log.exception("[bot] failed to send TikTok debug screenshot")
+    finally:
+        debug_artifacts.clear(key, "tiktok")
 
 
 async def handle_text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -762,6 +931,9 @@ async def handle_text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     pending for this chat, if any — otherwise falls through to
     handle_other's generic reply, same as any other non-video message."""
     if update.message is None or update.effective_chat is None:
+        return
+    if update.effective_chat.id in _PENDING_SCHEDULE:
+        await _handle_schedule_time_reply(update, context)
         return
     key = _PENDING_EDIT.get(update.effective_chat.id)
     if key is None:
@@ -771,6 +943,8 @@ async def handle_text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     _PENDING_EDIT.pop(update.effective_chat.id, None)
+    # (a typed caption can't also be a typed time — see the start of this
+    # function — so there is nothing pending in _PENDING_SCHEDULE here.)
     video_path = pipeline_state.video_path_for_key(config.state_file, key)
     if video_path is None:
         await update.message.reply_text(
@@ -933,32 +1107,6 @@ async def daily_status_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             log.exception("[bot] failed to send daily status to %s", user_id)
 
 
-def _run_cleanup(*, apply: bool) -> tuple[int, int]:
-    candidates = cleanup.plan(
-        config.state_file,
-        retention_days=config.cleanup_retention_days,
-        ignore_platforms=config.cleanup_ignore_platforms,
-        allowed_roots=[INCOMING_DIR, config.posting_copy_dir],
-        posting_copy_dir=config.posting_copy_dir,
-    )
-    if not apply:
-        return len(candidates), sum(c.size for c in candidates)
-    return cleanup.apply(candidates)
-
-
-async def daily_cleanup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    files, freed = await asyncio.to_thread(_run_cleanup, apply=True)
-    log.info("[bot] cleanup: deleted %d files, freed %.2f GB", files, freed / 1024**3)
-    if not files:
-        return
-    text = f"🧹 Cleanup harian: {files} file lama dihapus, {freed / 1024**3:.2f} GB bebas."
-    for user_id in config.telegram_allowed_user_ids:
-        try:
-            await context.bot.send_message(chat_id=user_id, text=text)
-        except Exception:  # noqa: BLE001
-            log.exception("[bot] failed to send cleanup report to %s", user_id)
-
-
 async def disk_watch_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Every few hours: speak up only when the disk is getting tight."""
     result = await asyncio.to_thread(health.check_disk_space)
@@ -973,26 +1121,6 @@ async def disk_watch_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.send_message(chat_id=user_id, text=text)
         except Exception:  # noqa: BLE001
             log.exception("[bot] failed to send disk alert to %s", user_id)
-
-
-async def cleanup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/cleanup shows what would go; /cleanup apply actually deletes it."""
-    if update.message is None or update.effective_user is None:
-        return
-    if not _allowed(update.effective_user.id):
-        return
-    apply = bool(context.args) and context.args[0].lower() == "apply"
-    files, size = await asyncio.to_thread(_run_cleanup, apply=apply)
-    gb = size / 1024**3
-    if apply:
-        await update.message.reply_text(f"🧹 {files} file dihapus, {gb:.2f} GB bebas.")
-    elif files:
-        await update.message.reply_text(
-            f"🧹 {files} file ({gb:.2f} GB) aman dihapus (selesai & lebih dari "
-            f"{config.cleanup_retention_days} hari).\nKirim /cleanup apply buat menghapus."
-        )
-    else:
-        await update.message.reply_text("🧹 Tidak ada yang perlu dihapus.")
 
 
 async def handle_other(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1030,11 +1158,679 @@ async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> No
         log.exception("[bot] could not report the error to the chat")
 
 
+# --- scheduled posting ------------------------------------------------------
+#
+# A schedule lives in state/posts.json ("scheduled_at", "schedule_chat_id"),
+# not only in the job queue: the HG680 is exactly the kind of box that
+# reboots or loses power, and an in-memory-only schedule would silently
+# evaporate. _restore_schedules re-registers every pending one on startup
+# (an overdue one runs shortly after the bot comes back, with a note saying
+# how late it is — posting late beats never posting).
+
+
+def _now_local() -> datetime.datetime:
+    return datetime.datetime.now(_REPORT_TZ)
+
+
+def _scheduled_when(entry: dict) -> datetime.datetime | None:
+    raw = entry.get("scheduled_at")
+    if not raw:
+        return None
+    try:
+        ts = datetime.datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=datetime.timezone.utc)
+    return ts.astimezone(_REPORT_TZ)
+
+
+def _remove_schedule_jobs(application: Application, key: str) -> None:
+    if application.job_queue is None:
+        return
+    for job in application.job_queue.get_jobs_by_name(f"sched:{key}"):
+        job.schedule_removal()
+
+
+def _register_schedule_job(
+    application: Application, key: str, when: datetime.datetime
+) -> None:
+    _remove_schedule_jobs(application, key)
+    if application.job_queue is None:
+        log.error("[bot] no job queue — scheduled post for %s won't fire", key)
+        return
+    application.job_queue.run_once(
+        _scheduled_post_job, when=when, name=f"sched:{key}", data={"key": key}
+    )
+
+
+async def _clear_schedule(
+    application: Application, key: str, video_path: Path
+) -> None:
+    _remove_schedule_jobs(application, key)
+    entry = pipeline_state.get(config.state_file, video_path)
+    if entry.get("scheduled_at"):
+        pipeline_state.update(
+            config.state_file,
+            video_path,
+            {"scheduled_at": None, "schedule_chat_id": None},
+        )
+
+
+async def _set_schedule(
+    application: Application,
+    key: str,
+    video_path: Path,
+    when: datetime.datetime,
+    chat_id: int,
+) -> None:
+    pipeline_state.update(
+        config.state_file,
+        video_path,
+        {
+            "scheduled_at": when.astimezone(datetime.timezone.utc).isoformat(),
+            "schedule_chat_id": chat_id,
+        },
+    )
+    _register_schedule_job(application, key, when)
+
+
+def _scheduled_text(entry: dict, when: datetime.datetime) -> str:
+    gemini = entry.get("gemini", {})
+    platforms = ", ".join(sorted(_selected_platforms(entry))) or "-"
+    return (
+        f"📅 Dijadwalkan: {schedule_lib.format_when(when, _now_local())} WIB\n"
+        f"📄 {gemini.get('file_name', '?')}\n"
+        f"📤 {platforms}\n\n"
+        f"📝 Caption:\n{entry.get('caption', '(kosong)')}\n\n"
+        "Bot yang posting otomatis pas jamnya. Kalau bot sempat mati lewat "
+        "jam itu, posting jalan begitu bot hidup lagi."
+    )
+
+
+def _scheduled_keyboard(key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🚀 Post sekarang", callback_data=f"post:{key}"),
+                InlineKeyboardButton("❌ Batalkan jadwal", callback_data=f"schedx:{key}"),
+            ]
+        ]
+    )
+
+
+def _schedule_keyboard(key: str, now: datetime.datetime) -> InlineKeyboardMarkup:
+    options: list[tuple[str, datetime.datetime]] = []
+    for label, delta in (("+1 jam", 1), ("+3 jam", 3)):
+        at = (now + datetime.timedelta(hours=delta)).replace(second=0, microsecond=0)
+        options.append((f"⏱ {label}", at))
+    for slot in schedule_lib.upcoming_slots(now, config.schedule_slot_hours, 2):
+        options.append((f"🕐 {schedule_lib.format_when(slot, now)}", slot))
+    buttons = [
+        InlineKeyboardButton(label, callback_data=f"sched:{key}:{int(at.timestamp())}")
+        for label, at in options
+    ]
+    rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
+    rows.append(
+        [
+            InlineKeyboardButton("✍️ Ketik jam", callback_data=f"sched:{key}:custom"),
+            InlineKeyboardButton("⬅️ Kembali", callback_data=f"sched:{key}:back"),
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+_SCHEDULE_PROMPT = "📅 Mau diposting kapan? (waktu WIB)"
+
+
+async def handle_schedule_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """📅 Jadwalkan flow: `sched:{key}` opens the picker, `sched:{key}:{epoch}`
+    picks a slot, `sched:{key}:custom|back`, and `schedx:{key}` cancels."""
+    query = update.callback_query
+    if query is None or query.data is None or query.message is None:
+        return
+    if update.effective_user is None or not _allowed(update.effective_user.id):
+        await query.answer("Belum diizinkan.", show_alert=True)
+        return
+    await query.answer()
+
+    action, _, rest = query.data.partition(":")
+    key, _, arg = rest.partition(":")
+    video_path = pipeline_state.video_path_for_key(config.state_file, key)
+    if video_path is None:
+        await query.edit_message_text(
+            "⚠️ Sesi ini sudah gak valid (bot mungkin sempat restart). "
+            "Kirim ulang videonya."
+        )
+        return
+    chat_id = query.message.chat_id
+    now = _now_local()
+
+    if action == "schedx":
+        _PENDING_SCHEDULE.pop(chat_id, None)
+        await _clear_schedule(context.application, key, video_path)
+        await query.edit_message_text("❌ Jadwal dibatalkan.")
+        await _send_confirmation(query.message, video_path)
+        return
+
+    entry = pipeline_state.get(config.state_file, video_path)
+    selected = _selected_platforms(entry)
+
+    if not arg:
+        if not selected:
+            await query.message.reply_text(
+                "⚠️ Pilih minimal satu platform dulu (ketuk salah satu tombol di atas)."
+            )
+            return
+        if not video_path.exists():
+            await query.edit_message_text(_missing_video_text())
+            return
+        _PENDING_SCHEDULE.pop(chat_id, None)
+        await query.edit_message_text(
+            _SCHEDULE_PROMPT, reply_markup=_schedule_keyboard(key, now)
+        )
+        return
+
+    if arg == "back":
+        _PENDING_SCHEDULE.pop(chat_id, None)
+        await query.edit_message_text(
+            _confirmation_text(entry, selected),
+            reply_markup=_confirmation_keyboard(key, selected),
+        )
+        return
+
+    if arg == "custom":
+        _PENDING_EDIT.pop(chat_id, None)
+        _PENDING_SCHEDULE[chat_id] = key
+        await query.edit_message_text(
+            "✍️ Ketik jamnya sebagai balasan (WIB).\n"
+            "Contoh: 19:30 · besok 07:00 · lusa 18:00 · +90m · +2j"
+        )
+        return
+
+    if arg.isdigit():
+        when = datetime.datetime.fromtimestamp(int(arg), tz=_REPORT_TZ)
+        if when - now < schedule_lib.MIN_LEAD:
+            await query.edit_message_text(
+                "⚠️ Jam itu sudah lewat/terlalu dekat — pilih lagi.\n\n"
+                + _SCHEDULE_PROMPT,
+                reply_markup=_schedule_keyboard(key, now),
+            )
+            return
+        await _set_schedule(context.application, key, video_path, when, chat_id)
+        entry = pipeline_state.get(config.state_file, video_path)
+        await query.edit_message_text(
+            _scheduled_text(entry, when), reply_markup=_scheduled_keyboard(key)
+        )
+
+
+async def _handle_schedule_time_reply(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """The plain-text reply after "✍️ Ketik jam"."""
+    assert update.message is not None and update.effective_chat is not None
+    if update.effective_user is None or not _allowed(update.effective_user.id):
+        return
+    chat_id = update.effective_chat.id
+    key = _PENDING_SCHEDULE.get(chat_id)
+    if key is None:
+        return
+    video_path = pipeline_state.video_path_for_key(config.state_file, key)
+    if video_path is None:
+        _PENDING_SCHEDULE.pop(chat_id, None)
+        await update.message.reply_text(
+            "⚠️ Sesi ini sudah gak valid, kirim ulang videonya."
+        )
+        return
+
+    when = schedule_lib.parse_when(update.message.text or "", _now_local())
+    if when is None:
+        # Stay in "waiting for a time" — a typo shouldn't dump the chat out
+        # of the flow and into the generic "kirim video" reply.
+        await update.message.reply_text(
+            "Gak kebaca / sudah lewat. Coba lagi: 19:30 · besok 07:00 · "
+            "lusa 18:00 · +90m · +2j"
+        )
+        return
+
+    _PENDING_SCHEDULE.pop(chat_id, None)
+    await _set_schedule(context.application, key, video_path, when, chat_id)
+    entry = pipeline_state.get(config.state_file, video_path)
+    await update.message.reply_text(
+        _scheduled_text(entry, when), reply_markup=_scheduled_keyboard(key)
+    )
+
+
+async def _scheduled_post_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    key = context.job.data["key"]  # type: ignore[index,union-attr]
+    video_path = pipeline_state.video_path_for_key(config.state_file, key)
+    if video_path is None:
+        return
+    entry = pipeline_state.get(config.state_file, video_path)
+    when = _scheduled_when(entry)
+    chat_id = entry.get("schedule_chat_id")
+    if when is None or chat_id is None:
+        return  # cancelled (or already fired) since this job was registered
+
+    # Claim it before doing anything slow, so a restart mid-run can't make
+    # _restore_schedules post the same video a second time.
+    pipeline_state.update(
+        config.state_file,
+        video_path,
+        {"scheduled_at": None, "schedule_chat_id": None},
+    )
+    if not video_path.exists():
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "⚠️ Posting terjadwal dibatalkan: file videonya sudah gak ada "
+                f"({video_path.name}). Kirim ulang videonya."
+            ),
+        )
+        return
+
+    selected = _selected_platforms(entry)
+    file_name = entry.get("gemini", {}).get("file_name") or video_path.name
+    late_s = (_now_local() - when).total_seconds()
+    note = ""
+    if late_s > 600:
+        note = (
+            f"\n(telat {heartbeat.humanize(late_s)} dari jadwal "
+            f"{schedule_lib.format_when(when)} — bot sempat mati)"
+        )
+    msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"⏰ Posting terjadwal jalan sekarang.\n📄 {file_name}{note}",
+    )
+    await _execute_post(msg, key, video_path, selected)
+
+
+def _restore_schedules(app: Application) -> int:
+    """Re-register every pending schedule from state.json (see the header
+    comment). Staggered so several overdue posts don't all start at once —
+    they'd queue on _PIPELINE_LOCK anyway, this just keeps the chat orderly."""
+    rows = pipeline_state.scheduled_entries(config.state_file)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    restored = 0
+    for i, (key, entry) in enumerate(rows):
+        when = _scheduled_when(entry)
+        if when is None:
+            continue
+        earliest = now + datetime.timedelta(seconds=45 + 10 * i)
+        _register_schedule_job(app, key, max(when, earliest))
+        restored += 1
+    return restored
+
+
+async def handle_jadwal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None or update.effective_user is None:
+        return
+    if not _allowed(update.effective_user.id):
+        return
+    rows = pipeline_state.scheduled_entries(config.state_file)
+    if not rows:
+        await update.message.reply_text(
+            "Belum ada posting terjadwal. Pakai tombol 📅 Jadwalkan di layar "
+            "konfirmasi video."
+        )
+        return
+    now = _now_local()
+    lines = ["📅 Posting terjadwal (WIB):"]
+    buttons = []
+    for i, (key, entry) in enumerate(rows, 1):
+        when = _scheduled_when(entry)
+        name = entry.get("gemini", {}).get("file_name") or Path(
+            entry.get("video_path", "?")
+        ).name
+        label = schedule_lib.format_when(when, now) if when else "?"
+        lines.append(f"{i}. {label} — {name}")
+        buttons.append(
+            [InlineKeyboardButton(f"❌ Batalkan #{i}", callback_data=f"schedx:{key}")]
+        )
+    await update.message.reply_text(
+        "\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+# --- disk space: guard, /cleanup, background jobs ----------------------------
+
+
+async def _notify(bot, text: str) -> None:
+    for user_id in config.telegram_allowed_user_ids:
+        try:
+            await bot.send_message(chat_id=user_id, text=text)
+        except Exception:  # noqa: BLE001 — one recipient failing shouldn't skip the rest
+            log.exception("[bot] failed to notify %s", user_id)
+
+
+async def _ensure_disk_room(message, size_mb: float) -> bool:
+    """True if there's room for this video; otherwise reply why and say no.
+
+    Tries a pressure cleanup first (it may well free enough), but never
+    while a run is in flight — see core/cleanup.py for why that matters.
+    """
+    need = int(size_mb * 1048576 * 1.15) + config.upload_min_free_mb * 1048576
+    if cleanup.disk_free_bytes() >= need:
+        return True
+
+    note = ""
+    if config.auto_cleanup and not _PIPELINE_LOCK.locked():
+        try:
+            report = await asyncio.to_thread(
+                cleanup.run, apply_changes=True, pressure=True
+            )
+            if report.deleted:
+                note = (
+                    f"Sudah dibersihkan {cleanup.fmt_bytes(report.freed_bytes)} "
+                    f"({report.deleted} file). "
+                )
+        except Exception:  # noqa: BLE001
+            log.exception("[bot] pressure cleanup before download failed")
+
+    free = cleanup.disk_free_bytes()
+    if free >= need:
+        return True
+    await message.reply_text(
+        "💾 Disk gak cukup buat video ini, jadi belum aku download.\n"
+        f"{note}Sisa {cleanup.fmt_bytes(free)}, butuh ± {cleanup.fmt_bytes(need)}.\n\n"
+        "Cek /cleanup — kalau yang numpuk video belum selesai (ada platform "
+        "gagal), retry atau batalkan dulu. Kalau memang kapasitasnya kecil, "
+        "pindahkan incoming/ ke USB/microSD (DEPLOYMENT.md → Disk space cleanup)."
+    )
+    return False
+
+
+async def handle_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None or update.effective_user is None:
+        return
+    if not _allowed(update.effective_user.id):
+        return
+
+    if context.args and context.args[0].lower() == "apply":
+        # The original `/cleanup apply` contract: delete right away.
+        if _PIPELINE_LOCK.locked():
+            await update.message.reply_text(
+                "⏳ Lagi ada proses posting yang jalan — coba /cleanup apply "
+                "lagi sebentar lagi."
+            )
+            return
+        done = await asyncio.to_thread(cleanup.run, apply_changes=True)
+        text = (
+            f"🧹 {done.deleted} file dihapus, "
+            f"{cleanup.fmt_bytes(done.freed_bytes)} bebas. "
+            f"Sisa disk {cleanup.fmt_bytes(cleanup.disk_free_bytes())}."
+        )
+        if done.errors:
+            text += "\n⚠️ Gagal hapus: " + "; ".join(done.errors[:3])
+        await update.message.reply_text(text)
+        return
+
+    report = await asyncio.to_thread(cleanup.assess)
+    free = cleanup.fmt_bytes(cleanup.disk_free_bytes())
+    lines = [
+        f"💾 Sisa disk: {free}" + (" ⚠️ (di bawah ambang)" if report.pressure else "")
+    ]
+    if report.items:
+        lines.append(
+            f"🗑 Bisa dihapus sekarang: {len(report.items)} file, "
+            f"{cleanup.fmt_bytes(report.total_bytes)}"
+        )
+        if report.abandoned_videos:
+            lines.append(
+                f"    ↳ {report.abandoned_videos} di antaranya video yang gak "
+                f"pernah dikonfirmasi/dibatalkan "
+                f"({cleanup.fmt_bytes(report.abandoned_bytes)}) — sama kayak "
+                "❌ Batal, master-nya tetap di Drive."
+            )
+    else:
+        lines.append("🗑 Belum ada file yang bisa dihapus.")
+    if report.orphan_files:
+        lines.append(
+            f"🧩 {report.orphan_files} file ({cleanup.fmt_bytes(report.orphan_bytes)}) "
+            "di incoming/ atau posting_copies/ yang gak tercatat di state — "
+            "gak dihapus otomatis (gak ada bukti master-nya sudah di Drive). "
+            "Cek manual di server."
+        )
+    if report.soon_videos:
+        lines.append(
+            f"⏳ {report.soon_videos} video sudah selesai tapi masih dalam masa "
+            f"tunggu {config.cleanup_retention_days} hari "
+            f"({cleanup.fmt_bytes(report.soon_bytes)})."
+        )
+    if report.held_back_videos:
+        lines.append(
+            f"⚠️ {report.held_back_videos} video belum selesai "
+            f"({cleanup.fmt_bytes(report.held_back_bytes)}) ditahan: ada platform "
+            "yang gagal/belum jalan, filenya masih dibutuhkan buat retry."
+        )
+    lines.append("\nMaster-nya aman di Google Drive; yang dihapus cuma salinan lokal.")
+
+    buttons = []
+    if report.items:
+        buttons.append(
+            [InlineKeyboardButton("🗑 Hapus sekarang", callback_data="cleanup:apply")]
+        )
+    if report.soon_videos:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    "🗑 Hapus juga yang masih masa tunggu",
+                    callback_data="cleanup:force",
+                )
+            ]
+        )
+    await update.message.reply_text(
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
+    )
+
+
+async def handle_cleanup_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    if query is None or query.data is None or query.message is None:
+        return
+    if update.effective_user is None or not _allowed(update.effective_user.id):
+        await query.answer("Belum diizinkan.", show_alert=True)
+        return
+    await query.answer()
+    mode = query.data.partition(":")[2]
+
+    if _PIPELINE_LOCK.locked():
+        await query.edit_message_text(
+            "⏳ Lagi ada proses posting yang jalan — hapus file sekarang bisa "
+            "mengganggunya. Coba /cleanup lagi sebentar lagi."
+        )
+        return
+    # Re-planned from scratch at tap time: the preview above may be minutes
+    # old, and a run could have started or finished since.
+    report = await asyncio.to_thread(
+        cleanup.run, apply_changes=True, pressure=True if mode == "force" else None
+    )
+    text = (
+        f"✅ {report.deleted} file dihapus, "
+        f"{cleanup.fmt_bytes(report.freed_bytes)} dibebaskan.\n"
+        f"💾 Sisa disk: {cleanup.fmt_bytes(cleanup.disk_free_bytes())}"
+    )
+    if report.errors:
+        text += "\n⚠️ Gagal hapus: " + "; ".join(report.errors[:3])
+    await query.edit_message_text(text)
+
+
+async def housekeeping_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Every HEARTBEAT_INTERVAL_MIN: prove we're alive, and relieve disk pressure.
+
+    Runs even with TELEGRAM_ALLOWED_USER_IDS empty — the heartbeat doesn't
+    need anyone to message; only the notifications below do.
+    """
+    heartbeat.beat()
+    if config.heartbeat_ping_url:
+        await asyncio.to_thread(heartbeat.ping)
+
+    try:
+        if not config.auto_cleanup or _PIPELINE_LOCK.locked():
+            return
+        if not await asyncio.to_thread(cleanup.under_pressure):
+            return
+        report = await asyncio.to_thread(cleanup.run, apply_changes=True, pressure=True)
+        # Only says something when it actually freed space. "Still low and
+        # nothing left to delete" is deliberately NOT announced here: the
+        # 6-hourly disk_watch_job (DISK_WARN/ERROR_FREE_PCT) already does,
+        # and two bots-in-one pinging about the same disk is just noise.
+        if report.deleted:
+            await _notify(
+                context.bot,
+                f"🧹 Disk menipis, otomatis dihapus {report.deleted} file "
+                f"({cleanup.fmt_bytes(report.freed_bytes)}). "
+                f"Sisa disk {cleanup.fmt_bytes(cleanup.disk_free_bytes())}.",
+            )
+    except Exception:  # noqa: BLE001 — the heartbeat above already went out
+        log.exception("[bot] housekeeping failed")
+
+
+async def daily_cleanup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _PIPELINE_LOCK.locked():
+        log.info("[bot] daily cleanup skipped: a run is in progress")
+        return
+    try:
+        pruned = debug_artifacts.prune()
+        report = await asyncio.to_thread(cleanup.run, apply_changes=True)
+    except Exception:  # noqa: BLE001
+        log.exception("[bot] daily cleanup failed")
+        return
+    log.info(
+        "[bot] daily cleanup: %d file(s), %s freed, %d old screenshot(s) pruned",
+        report.deleted,
+        cleanup.fmt_bytes(report.freed_bytes),
+        pruned,
+    )
+    if report.deleted:
+        await _notify(
+            context.bot,
+            f"🧹 Bersih-bersih harian: {report.deleted} file dihapus, "
+            f"{cleanup.fmt_bytes(report.freed_bytes)} dibebaskan. "
+            f"Sisa disk {cleanup.fmt_bytes(cleanup.disk_free_bytes())}.",
+        )
+
+
+# --- post performance --------------------------------------------------------
+
+_PLATFORM_SHORT = {"youtube": "YT", "facebook": "FB", "instagram": "IG", "threads": "TH"}
+
+
+def _fmt_count(n: float) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return f"{n:.0f}"
+
+
+async def handle_insights(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None or update.effective_user is None:
+        return
+    if not _allowed(update.effective_user.id):
+        return
+
+    prefix = ""
+    if context.args and context.args[0].lower() in ("refresh", "update"):
+        summary = await asyncio.to_thread(insights.collect)
+        prefix = f"🔄 Ambil angka terbaru: {summary.ok} berhasil, {summary.failed} gagal."
+        if summary.errors:
+            prefix += "\n" + "\n".join(f"• {e}" for e in summary.errors[:4])
+        prefix += "\n\n"
+
+    rows = await asyncio.to_thread(insights.ranked, days=30)
+    if not rows:
+        await update.message.reply_text(
+            prefix + "Belum ada data performa.\n\n"
+            "Angka diambil otomatis ±24 jam dan ±72 jam setelah posting "
+            "(YouTube, Facebook, Instagram, Threads). Butuh YOUTUBE_API_KEY "
+            "di .env untuk YouTube, dan token Meta/Threads yang punya izin "
+            "insights. `/insights refresh` buat coba ambil sekarang."
+        )
+        return
+
+    lines = ["📊 Performa 30 hari terakhir (views)"]
+    for i, row in enumerate(rows[:5], 1):
+        detail = " · ".join(
+            f"{_PLATFORM_SHORT.get(p, p)} {_fmt_count(v)}"
+            for p, v in sorted(row.per_platform.items(), key=lambda kv: -kv[1])
+        )
+        hook = (row.hook[:70] + "…") if len(row.hook) > 70 else row.hook
+        lines.append(
+            f"{i}. {_fmt_count(row.total_views)} — {hook or '(tanpa caption)'}\n"
+            f"    {detail}"
+        )
+    averages = insights.platform_averages(days=30)
+    if averages:
+        lines.append(
+            "\nRata-rata per post: "
+            + " · ".join(
+                f"{_PLATFORM_SHORT.get(p, p)} {_fmt_count(avg)} ({n})"
+                for p, (n, avg) in sorted(averages.items(), key=lambda kv: -kv[1][1])
+            )
+        )
+    hooks_note = (
+        f"\n\nCaption berikutnya memakai {config.caption_top_hooks} hook terbaik "
+        "sebagai referensi gaya."
+        if insights.top_hooks()
+        else f"\n\nHook terbaik baru dipakai Gemini setelah ≥{config.insights_min_samples} "
+        f"post punya data (sekarang {len(rows)})."
+    )
+    await update.message.reply_text(prefix + "\n".join(lines) + hooks_note)
+
+
+async def insights_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        await asyncio.to_thread(insights.collect)
+    except Exception:  # noqa: BLE001
+        log.exception("[bot] insights collection failed")
+
+
 _BOT_COMMANDS = [
     BotCommand("status", "Cek status integrasi (Gemini, Drive, YouTube, Meta, Threads)"),
     BotCommand("dashboard", "Link ke admin dashboard (edit token, kontrol bot)"),
-    BotCommand("cleanup", "Hapus video lama yang sudah selesai (tambah 'apply')"),
+    BotCommand("cleanup", "Cek & bersihkan disk (tambah 'apply' buat langsung hapus)"),
+    BotCommand("jadwal", "Daftar posting terjadwal"),
+    BotCommand("insights", "Performa post (views per platform)"),
 ]
+
+
+async def _announce_startup(app: Application) -> None:
+    """Say the bot is up — and, if it wasn't for a while, for how long.
+
+    This is the cheap half of noticing outages: the box was once dark for
+    ~19 days with nobody the wiser. Everything that *runs on* the box can't
+    report its own absence, but the first thing it can do when it returns is
+    say so, with the gap read back from the last heartbeat on disk.
+    """
+    previous_age = heartbeat.age_seconds()
+    heartbeat.beat()
+
+    gap_threshold = max(10 * 60, 3 * config.heartbeat_interval_min * 60)
+    if previous_age is None:
+        head = "🟢 Bot MentahanPOV nyala (belum ada catatan hidup sebelumnya)."
+    elif previous_age > gap_threshold:
+        last = heartbeat.last_beat()
+        when = (
+            last.astimezone(_REPORT_TZ).strftime("%d %b %H:%M WIB") if last else "?"
+        )
+        head = (
+            f"🟢 Bot online lagi. Sempat mati ± {heartbeat.humanize(previous_age)} "
+            f"(terakhir hidup {when})."
+        )
+    else:
+        head = "🟢 Bot restart (downtime singkat)."
+
+    lines = [head, f"💾 Sisa disk {cleanup.fmt_bytes(cleanup.disk_free_bytes())}"]
+    pending = len(pipeline_state.scheduled_entries(config.state_file))
+    if pending:
+        lines.append(f"📅 {pending} posting terjadwal dilanjutkan (cek /jadwal).")
+    await _notify(app.bot, "\n".join(lines))
 
 
 async def _post_init(app: Application) -> None:
@@ -1044,6 +1840,10 @@ async def _post_init(app: Application) -> None:
     know to type them. Safe to call on every startup: Telegram just
     overwrites the list with the same values."""
     await app.bot.set_my_commands(_BOT_COMMANDS)
+    try:
+        await _announce_startup(app)
+    except Exception:  # noqa: BLE001 — never block startup on a courtesy message
+        log.exception("[bot] startup announcement failed")
 
 
 def main() -> None:
@@ -1094,12 +1894,18 @@ def main() -> None:
     # first match wins, and filters.ALL matches everything else does too.
     app.add_handler(CommandHandler("status", handle_status))
     app.add_handler(CommandHandler("dashboard", handle_dashboard))
-    app.add_handler(CommandHandler("cleanup", cleanup_command))
+    app.add_handler(CommandHandler("cleanup", handle_cleanup))
+    app.add_handler(CommandHandler("jadwal", handle_jadwal))
+    app.add_handler(CommandHandler("insights", handle_insights))
     app.add_handler(
         CallbackQueryHandler(
             handle_confirm_callback, pattern=r"^(post|cancel|edit|retry|toggle|stop):"
         )
     )
+    app.add_handler(
+        CallbackQueryHandler(handle_schedule_callback, pattern=r"^(sched|schedx):")
+    )
+    app.add_handler(CallbackQueryHandler(handle_cleanup_callback, pattern=r"^cleanup:"))
     app.add_handler(
         MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video)
     )
@@ -1109,11 +1915,6 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL, handle_other))
     app.add_error_handler(handle_error)
 
-    # Runs regardless of the allowlist: freeing disk shouldn't depend on
-    # having someone to report to (the reports just skip when it's empty).
-    app.job_queue.run_daily(
-        daily_cleanup_job, time=datetime.time(hour=4, tzinfo=_REPORT_TZ)
-    )
     if config.telegram_allowed_user_ids:
         app.job_queue.run_repeating(disk_watch_job, interval=6 * 3600, first=300)
         app.job_queue.run_daily(
@@ -1128,6 +1929,35 @@ def main() -> None:
         log.warning(
             "[bot] TELEGRAM_ALLOWED_USER_IDS empty — daily status report has "
             "nowhere to send to, disabled. /status still works on demand."
+        )
+
+    # Registered regardless of the allowlist above: the heartbeat/housekeeping
+    # tick doesn't need anyone to message — only its notifications do, and
+    # _notify just has no recipients then.
+    if app.job_queue is not None:
+        app.job_queue.run_repeating(
+            housekeeping_job,
+            interval=datetime.timedelta(minutes=max(1, config.heartbeat_interval_min)),
+            first=10,
+            name="housekeeping",
+        )
+        if config.auto_cleanup:
+            app.job_queue.run_daily(
+                daily_cleanup_job,
+                time=datetime.time(hour=config.cleanup_hour, tzinfo=_REPORT_TZ),
+            )
+            log.info(
+                "[bot] daily cleanup scheduled for %02d:00 WIB", config.cleanup_hour
+            )
+        if config.insights_enabled:
+            app.job_queue.run_repeating(insights_job, interval=3600, first=300)
+        restored = _restore_schedules(app)
+        if restored:
+            log.info("[bot] restored %d scheduled post(s)", restored)
+    else:
+        log.error(
+            "[bot] no job queue (python-telegram-bot[job-queue] missing?) — "
+            "heartbeat, auto-cleanup, insights and scheduled posts are disabled"
         )
 
     log.info("[bot] MentahanPOV bot starting (polling)...")

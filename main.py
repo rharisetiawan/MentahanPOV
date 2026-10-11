@@ -20,7 +20,15 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from config import config
-from core import gdrive, gemini, geocode, state, video_facts, watermark
+from core import (
+    debug_artifacts,
+    gdrive,
+    gemini,
+    geocode,
+    state,
+    video_facts,
+    watermark,
+)
 from distributors import (
     facebook,
     facebook_story,
@@ -71,6 +79,41 @@ STORY_PLATFORMS = {"facebook_story", "instagram_story"}
 # constraint, so it's safe (and worth it: these are network-bound, not
 # CPU-bound, so overlapping them is close to free even on weak hardware).
 MAIN_THREAD_ONLY_PLATFORMS = set() if config.tiktok_worker_host else {"tiktok"}
+
+
+def _warn_unselected_but_configured(platforms: list[str]) -> None:
+    """Flag credentials sitting unused because the platform isn't selected.
+
+    threads/tiktok are opt-in (see config.py's `platforms` field) — it's
+    entirely possible to set THREADS_USER_ID/ACCESS_TOKEN or do the TikTok
+    Playwright login correctly and still never see a single post there,
+    silently, because "threads"/"tiktok" was never added to PLATFORMS *or*
+    TELEGRAM_PLATFORMS (which fully overrides PLATFORMS for bot-triggered
+    runs rather than adding to it — this exact mix-up already happened once,
+    see logs/2026-09-04-session.md). A log line here beats another week of
+    "kok gak lari ke sana ya" with no error anywhere to point at.
+    """
+    checks = [
+        ("threads", bool(config.threads_user_id and config.threads_access_token)),
+        (
+            "tiktok",
+            # TIKTOK_ENABLED=false removes TikTok from PLATFORM_REGISTRY on
+            # purpose (the remote worker keeps timing out) — credentials
+            # sitting unused then are the intended state, not a mix-up, and
+            # warning about them on every run would only be noise.
+            config.tiktok_enabled
+            and (config.tiktok_storage_state.exists() or bool(config.tiktok_worker_host)),
+        ),
+    ]
+    for name, configured in checks:
+        if configured and name not in platforms:
+            log.warning(
+                "[config-check] %s punya kredensial/login yang sudah diset, tapi "
+                "gak ada di daftar platform run ini (%s) — tambahin ke PLATFORMS "
+                "atau TELEGRAM_PLATFORMS di .env kalau memang mau diposting ke sana.",
+                name,
+                ", ".join(platforms) or "(kosong)",
+            )
 
 
 def setup_logging(verbose: bool) -> None:
@@ -249,6 +292,22 @@ def step_cleanup(temp_ids: list[str]) -> None:
         gdrive.delete_file(file_id)
 
 
+def _park_failure_screenshot(video: Path, platform: str, exc: BaseException) -> None:
+    """Keep a failing platform's page screenshot where the bot can find it.
+
+    Distributors that drive a browser (tiktok.py locally, tiktok_remote.py
+    via the worker) attach one to the exception they raise — either raw PNG
+    bytes or a path on this machine. See core/debug_artifacts.py.
+    """
+    key = state.video_key(video)
+    png = getattr(exc, "screenshot_png", None)
+    path = getattr(exc, "screenshot_path", None)
+    if png:
+        debug_artifacts.save_bytes(key, platform, png)
+    elif path:
+        debug_artifacts.save_copy(key, platform, Path(path))
+
+
 def step_distribute(
     video: Path,
     post_video: Path,
@@ -262,6 +321,9 @@ def step_distribute(
     def _post_one(name: str) -> None:
         try:
             log.info("[%s] posting…", name)
+            # A screenshot left by an earlier failed attempt must not be
+            # mistaken for this attempt's (the bot sends whatever is parked).
+            debug_artifacts.clear(state.video_key(video), name)
             upload = story_video if name in STORY_PLATFORMS else post_video
             result = PLATFORM_REGISTRY[name](
                 upload, caption, gdrive_url=gdrive_url, **extra_urls
@@ -273,10 +335,12 @@ def step_distribute(
                 status="ok",
                 url=result.get("url"),
                 error=None,
+                post_id=result.get("id") or None,
             )
             log.info("[%s] OK → %s", name, result.get("url"))
         except Exception as exc:  # noqa: BLE001 — we WANT to keep going.
             log.exception("[%s] FAILED: %s", name, exc)
+            _park_failure_screenshot(video, name, exc)
             state.mark_platform(
                 config.state_file,
                 video,
@@ -323,6 +387,7 @@ def main() -> int:
 
     platforms = [p.strip() for p in args.platforms.split(",") if p.strip()]
     log.info("Pipeline start: video=%s platforms=%s", video.name, platforms)
+    _warn_unselected_but_configured(platforms)
 
     facts = video_facts.extract_facts(video)
     address, coordinates = step_geocode(facts)

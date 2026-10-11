@@ -17,12 +17,13 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
 
 from config import config
-from core import google_auth
+from core import cleanup, google_auth
 
 # Import lazily inside functions where the module has heavier deps
 # (google-genai) so a health check on one integration never fails because
@@ -49,7 +50,7 @@ def _google_token(*, label: str, token_file: Path, scopes: list[str]) -> CheckRe
             secrets_path=config.youtube_client_secrets,
             scopes=scopes,
         )
-        return CheckResult(label, "ok", "Refreshes fine right now.")
+        return _google_age_result(label, token_file)
     except Exception as exc:  # noqa: BLE001 — report every failure mode the same way
         msg = str(exc)
         if "invalid_grant" in msg or "expired" in msg.lower() or "revoked" in msg.lower():
@@ -60,6 +61,48 @@ def _google_token(*, label: str, token_file: Path, scopes: list[str]) -> CheckRe
                 "(see DEPLOYMENT.md → 'Re-authenticating Google OAuth').",
             )
         return CheckResult(label, "error", f"{type(exc).__name__}: {msg[:200]}")
+
+
+def _google_age_result(label: str, token_file: Path) -> CheckResult:
+    """The "works right now" result, plus a countdown when we can compute one.
+
+    Google can't be asked when a Testing-mode refresh token dies, but it
+    always dies a fixed number of days after the original consent — and
+    core/google_auth.py records when that was ("granted_at"). So a token we
+    know the age of gets a real "N days left" and a warning *before* the
+    outage instead of only after. Tokens that predate that bookkeeping just
+    get the plain message until they're next re-authenticated.
+    """
+    ok = "Refreshes fine right now."
+    max_age = config.google_token_max_age_days
+    granted = google_auth.read_granted_at(token_file)
+    if granted is None or max_age <= 0:
+        return CheckResult(label, "ok", ok)
+
+    age_days = (datetime.now(timezone.utc) - granted).total_seconds() / 86400
+    left = max_age - age_days
+    if left <= 0:
+        return CheckResult(
+            label,
+            "ok",
+            f"{ok} Token is {age_days:.0f} days old and still works — the app "
+            f"is probably in Production now; set GOOGLE_TOKEN_MAX_AGE_DAYS=0.",
+        )
+    if left <= 1.5:
+        return CheckResult(
+            label,
+            "warning",
+            f"Works now, but the token is {age_days:.1f} days old and a "
+            f"Testing-mode app loses it ~{max_age} days after consent "
+            f"(~{left:.1f} days left). Re-authenticate soon: "
+            "python scripts/reauth_google.py",
+        )
+    return CheckResult(
+        label,
+        "ok",
+        f"{ok} Token is {age_days:.1f} days old (~{left:.1f} days left "
+        "if the app is still in Testing).",
+    )
 
 
 def check_gdrive() -> CheckResult:
@@ -179,12 +222,14 @@ def check_gemini_fallback() -> CheckResult:
 
 
 def check_disk_space() -> CheckResult:
-    """Free space on the partition holding state/ (and incoming/).
+    """How full the disk is, what's using it, and how much cleanup can give back.
 
-    core/cleanup.py prunes finished jobs daily, but if a job keeps failing
-    its files are kept for retry, so this is the backstop: on a board with a
-    small SD card/eMMC, a full disk fails runs with ENOSPC and takes Docker
-    down with it. Thresholds come from DISK_WARN_FREE_PCT/DISK_ERROR_FREE_PCT.
+    The bot (telegram_bot.py) cleans up by itself — see core/cleanup.py — so
+    a low reading here normally means "cleanup already ran and what's left is
+    unfinished videos" (kept for retry) or things outside this project; the
+    detail says so explicitly. Status thresholds come from
+    DISK_WARN_FREE_PCT / DISK_ERROR_FREE_PCT (also what the 6-hourly Telegram
+    disk alert uses), so /status and that alert can never disagree.
     """
     import shutil
 
@@ -195,17 +240,46 @@ def check_disk_space() -> CheckResult:
 
     free_pct = usage.free / usage.total * 100
     free_gb = usage.free / (1024**3)
+    head = f"{free_gb:.1f}GB free ({free_pct:.0f}%)"
+
+    breakdown = ""
+    try:
+        # The read-only dashboard container doesn't mount incoming/ (see
+        # docker-compose.yml) — reporting "incoming 0 MB, 0 reclaimable"
+        # from there would be actively misleading, so say nothing instead.
+        if not cleanup.INCOMING_DIR.exists():
+            raise FileNotFoundError(cleanup.INCOMING_DIR)
+        incoming = cleanup.dir_size(cleanup.INCOMING_DIR)
+        copies = cleanup.dir_size(cleanup.posting_copy_root())
+        report = cleanup.assess(pressure=False)
+        breakdown = (
+            f" incoming {cleanup.fmt_bytes(incoming)}, "
+            f"posting copies {cleanup.fmt_bytes(copies)}; "
+            f"{cleanup.fmt_bytes(report.total_bytes)} reclaimable now"
+        )
+        if report.held_back_videos:
+            breakdown += (
+                f", {report.held_back_videos} unfinished video(s) "
+                f"({cleanup.fmt_bytes(report.held_back_bytes)}) kept for retry"
+            )
+        if report.orphan_files:
+            breakdown += (
+                f", {report.orphan_files} untracked file(s) "
+                f"({cleanup.fmt_bytes(report.orphan_bytes)}) to inspect by hand"
+            )
+        breakdown += "."
+    except Exception:  # noqa: BLE001 — a breakdown must never hide the free-space figure
+        breakdown = ""
+
     if free_pct < config.disk_error_free_pct:
         return CheckResult(
             "Disk space",
             "error",
-            f"Only {free_gb:.1f}GB free ({free_pct:.0f}%) — run cleanup / free space now.",
+            f"Only {head} — run cleanup / free space now.{breakdown}",
         )
     if free_pct < config.disk_warn_free_pct:
-        return CheckResult(
-            "Disk space", "warning", f"{free_gb:.1f}GB free ({free_pct:.0f}%) — getting low."
-        )
-    return CheckResult("Disk space", "ok", f"{free_gb:.1f}GB free ({free_pct:.0f}%).")
+        return CheckResult("Disk space", "warning", f"{head} — getting low.{breakdown}")
+    return CheckResult("Disk space", "ok", f"{head}.{breakdown}")
 
 
 ALL_CHECKS = [

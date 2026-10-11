@@ -31,6 +31,7 @@ distributors/tiktok.py.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import sys
@@ -44,6 +45,19 @@ from config import config
 from distributors import tiktok
 
 log = logging.getLogger("mentahanpov.worker")
+
+
+def _screenshot_b64(path: Path | str | None) -> str | None:
+    """Base64 of a failure screenshot, or None if there isn't one worth sending."""
+    if not path:
+        return None
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return None
+    if not data or len(data) > 6 * 1024 * 1024:
+        return None
+    return base64.b64encode(data).decode("ascii")
 
 
 def _download(url: str, dest: Path) -> None:
@@ -99,9 +113,13 @@ class Handler(BaseHTTPRequestHandler):
                 result = tiktok.post(video_path, caption)
             except Exception as exc:  # noqa: BLE001 — must always report back
                 log.exception("[worker] job failed")
-                self._send_json(
-                    200, {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
-                )
+                body = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+                shot = _screenshot_b64(getattr(exc, "screenshot_path", None))
+                if shot:
+                    # Lets the bot show *what page TikTok was actually
+                    # showing* in the chat — no SSH into this box needed.
+                    body["screenshot_b64"] = shot
+                self._send_json(200, body)
                 return
         log.info("[worker] job done: %s", result.get("url"))
         self._send_json(200, {"status": "ok", "url": result.get("url", "")})

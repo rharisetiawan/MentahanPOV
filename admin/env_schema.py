@@ -23,7 +23,9 @@ _KV_RE = re.compile(r"^([A-Z][A-Z0-9_]*)=(.*)$")
 # Field-kind heuristics. A field is classified "path" before "secret" —
 # YOUTUBE_CLIENT_SECRETS, for instance, ends in SECRETS but holds a file
 # path, not a literal secret string, so path wins.
-_SECRET_KEY_RE = re.compile(r"(TOKEN|API_KEY|SECRET|PASSWORD|HASH)$")
+# PING_URL: a hosted dead-man's-switch URL (HEARTBEAT_PING_URL) *is* the
+# credential — anyone holding it can fake "I'm alive" pings.
+_SECRET_KEY_RE = re.compile(r"(TOKEN|API_KEY|SECRET|PASSWORD|HASH|PING_URL)$")
 _PATH_KEY_RE = re.compile(r"(_FILE|_PATH|_DIR|_STATE|_SECRETS)$")
 
 

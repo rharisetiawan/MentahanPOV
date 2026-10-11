@@ -42,11 +42,32 @@ def _load_prompt(
     coordinates: str | None,
     duration_s: int,
     resolution: str,
+    top_hooks: list[str] | None = None,
 ) -> str:
     if not PROMPT_PATH.exists():
         raise FileNotFoundError(f"SOP V3 prompt not found at {PROMPT_PATH}")
     template = PROMPT_PATH.read_text(encoding="utf-8")
     folders_list = "\n".join(f"- {f}" for f in config.drive_categories)
+
+    # Style reference drawn from this account's own best performers (see
+    # core/insights.py). Hooks only — never whole captions — and framed as
+    # rhythm/shape reference so the model doesn't parrot or carry over any
+    # detail. The placeholder swallows its trailing blank line when there's
+    # nothing to show, so an account with no data yet gets a byte-identical
+    # prompt to the one that existed before this feature.
+    if top_hooks:
+        hooks_block = (
+            "PROVEN HOOKS — opening lines that performed best on this account so\n"
+            "far. Use them ONLY as a reference for rhythm and tone. Never reuse\n"
+            "their wording and never carry over any detail from them (place,\n"
+            "sound, object): your hook must be about THIS video.\n"
+            + "\n".join(f"- {h}" for h in top_hooks)
+            + "\n\n"
+        )
+    else:
+        hooks_block = ""
+    template = template.replace("{{TOP_HOOKS_BLOCK}}\n\n", hooks_block)
+    template = template.replace("{{TOP_HOOKS_BLOCK}}", hooks_block.rstrip("\n"))
 
     # With no GPS in the file there is nothing honest to print, so the whole
     # location line — and the location half of the file name — is dropped
@@ -170,12 +191,26 @@ def generate_metadata(
 
     file = _upload_and_wait(client, video_path)
 
+    try:
+        # Imported here, not at module top: insights pulls in requests and
+        # the Graph helpers, which a caption run shouldn't hard-depend on —
+        # and a bug in the feedback loop must never block captioning.
+        from core import insights
+
+        top_hooks = insights.top_hooks()
+    except Exception:  # noqa: BLE001 — optional enrichment, never fatal
+        log.exception("[gemini] couldn't load top hooks; continuing without")
+        top_hooks = []
+    if top_hooks:
+        log.info("[gemini] using %d proven hook(s) as style reference", len(top_hooks))
+
     prompt = _load_prompt(
         date=date,
         address=address,
         coordinates=coordinates,
         duration_s=duration_s,
         resolution=resolution,
+        top_hooks=top_hooks,
     )
 
     # A "high demand" 503 tends to be specific to one model's capacity

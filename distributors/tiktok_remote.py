@@ -16,6 +16,8 @@ which meant that design never actually worked in either direction.)
 
 from __future__ import annotations
 
+import base64
+import binascii
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +26,19 @@ import requests
 from config import config
 
 PLATFORM = "tiktok"
+
+
+class TikTokRemoteError(RuntimeError):
+    """The worker reported a failure, possibly with a screenshot of the page.
+
+    main.py's _park_failure_screenshot looks for `screenshot_png` on any
+    exception a distributor raises, so this is all that's needed to get the
+    image from the worker's browser into the Telegram chat.
+    """
+
+    def __init__(self, message: str, *, screenshot_png: bytes | None = None) -> None:
+        super().__init__(message)
+        self.screenshot_png = screenshot_png
 
 
 def post(
@@ -55,5 +70,15 @@ def post(
     resp.raise_for_status()
     result = resp.json()
     if result.get("status") != "ok":
-        raise RuntimeError(f"TikTok worker reported failure: {result.get('error')}")
+        png: bytes | None = None
+        encoded = result.get("screenshot_b64")
+        if encoded:
+            try:
+                png = base64.b64decode(encoded, validate=True)
+            except (binascii.Error, ValueError):
+                png = None  # a bad screenshot must not hide the real error
+        raise TikTokRemoteError(
+            f"TikTok worker reported failure: {result.get('error')}",
+            screenshot_png=png,
+        )
     return {"url": result.get("url", "")}

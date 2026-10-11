@@ -1,14 +1,20 @@
 #!/bin/sh
 # mentahan — satu perintah buat ngurus server HG680 tanpa hafal docker.
 #   mentahan status     cek disk, docker, container, tailscale
-#   mentahan fix        nyalakan docker + semua container + tailscale
+#   mentahan fix        nyalakan docker + semua container + tailscale (host)
 #   mentahan cleanup    hapus video lama yang sudah selesai (lewat bot)
 #   mentahan logs       30 baris log bot terakhir
 #   mentahan disk       siapa yang makan disk
 #   mentahan watchdog   pasang penjaga otomatis (cek tiap 5 menit)
 # Jalankan pakai sudo kalau diminta password. Aman dijalankan berulang.
 APP=/www/apps/mentahanpov
-TS=tailscale-hg680
+# Tailscale is owned by the HOST service (systemd `tailscaled`) since
+# 2026-10-11. The old `tailscale-hg680` container uses host networking and
+# fights the host daemon for the tailscale0 device: started together they
+# crash-loop and keep wiping tailscale0's address/routes, which is what
+# silently cut remote access for 30 days. It is stopped with restart=no and
+# must NOT be started again by this script.
+TS_CONTAINER=tailscale-hg680
 cd "$APP" || { echo "folder $APP tidak ada"; exit 1; }
 SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
 
@@ -20,7 +26,11 @@ status() {
   echo "== Container =="
   $SUDO docker ps -a --format 'table {{.Names}}\t{{.Status}}' 2>/dev/null || echo "(docker tidak merespons)"
   echo "== Tailscale =="
-  $SUDO docker exec $TS tailscale status 2>/dev/null | head -4 || echo "(tailscale tidak jalan)"
+  tailscale status 2>/dev/null | head -4 || echo "(tailscale tidak jalan)"
+  tailscale ip -4 2>/dev/null | head -1 || true
+  if [ "$($SUDO docker inspect -f '{{.State.Running}}' $TS_CONTAINER 2>/dev/null)" = "true" ]; then
+    echo "!! container $TS_CONTAINER jalan — bentrok dengan tailscaled host. Matikan: docker update --restart=no $TS_CONTAINER && docker stop $TS_CONTAINER"
+  fi
 }
 
 fix() {
@@ -32,7 +42,8 @@ fix() {
   docker_ok || { echo "Docker mati, menyalakan..."; $SUDO systemctl restart docker; sleep 8; }
   docker_ok || { echo "Docker gagal naik. Cek: sudo journalctl -u docker -n 40"; exit 1; }
   $SUDO docker compose up -d
-  $SUDO docker start $TS >/dev/null 2>&1
+  # Tailscale: make sure the HOST service is up. Do not start $TS_CONTAINER.
+  systemctl is-active --quiet tailscaled || $SUDO systemctl restart tailscaled
   sleep 3; status
 }
 

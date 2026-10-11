@@ -241,6 +241,83 @@ class Config:
     state_file: Path = field(
         default_factory=lambda: Path(_env("STATE_FILE", "./state/posts.json"))
     )
+    # (CLEANUP_RETENTION_DAYS, CLEANUP_IGNORE_PLATFORMS and the DISK_*_FREE_PCT
+    # alert thresholds live in the "Automatic disk cleanup" block further down.)
+    #
+    # The bot (telegram_bot.py) runs the same cleanup itself — after every
+    # run, once a day at CLEANUP_HOUR (WIB), and immediately when free disk
+    # drops under DISK_PRESSURE_FREE_GB — so it doesn't depend on a host cron
+    # entry that, on a box that goes offline for weeks, may simply not exist.
+    # Under pressure the retention window is skipped; every other safety
+    # condition in core/cleanup.py still applies.
+    auto_cleanup: bool = field(
+        default_factory=lambda: _env("AUTO_CLEANUP", "true").lower() != "false"
+    )
+    cleanup_hour: int = field(default_factory=lambda: int(_env("CLEANUP_HOUR", "4")))
+    # A video that was dry-run (master already on Drive) but never posted,
+    # scheduled, or cancelled can be deleted locally after this many days —
+    # what ❌ Batal would have done. OFF by default (0): replaying the box's
+    # real posts.json showed it would delete a file the 2026-10-04 cleanup had
+    # deliberately held back for the owner to decide on, and a new feature must
+    # not silently delete things someone already chose to keep. Opt in with e.g. 7.
+    abandoned_retention_days: int = field(
+        default_factory=lambda: int(_env("ABANDONED_RETENTION_DAYS", "0"))
+    )
+    disk_pressure_free_gb: float = field(
+        default_factory=lambda: float(_env("DISK_PRESSURE_FREE_GB", "2"))
+    )
+    # A new video is refused (with an explanation) instead of half-downloaded
+    # when free space, after a pressure cleanup, is below its size plus this.
+    upload_min_free_mb: int = field(
+        default_factory=lambda: int(_env("UPLOAD_MIN_FREE_MB", "1024"))
+    )
+
+    # Liveness. The bot rewrites state/heartbeat.json every
+    # HEARTBEAT_INTERVAL_MIN minutes (read back on startup to report how long
+    # it was down, and by dashboard.py's /heartbeat for scripts/watchdog.py),
+    # and — if set — GETs HEARTBEAT_PING_URL on the same beat (e.g. a
+    # healthchecks.io check, which alerts you when the pings *stop*; that's
+    # the only kind of signal that still works when the whole box is dead).
+    heartbeat_interval_min: int = field(
+        default_factory=lambda: int(_env("HEARTBEAT_INTERVAL_MIN", "5"))
+    )
+    heartbeat_ping_url: str = field(default_factory=lambda: _env("HEARTBEAT_PING_URL"))
+
+    # Google OAuth apps whose consent screen is still in "Testing" get
+    # refresh tokens that die a fixed 7 days after the original grant (see
+    # DEPLOYMENT.md -> "Google OAuth"). core/health.py uses this to warn a
+    # day or two *before* that happens, when it knows when the token was
+    # granted. 0 disables the countdown (use once the app is in Production).
+    google_token_max_age_days: int = field(
+        default_factory=lambda: int(_env("GOOGLE_TOKEN_MAX_AGE_DAYS", "7"))
+    )
+
+    # Post performance (core/insights.py). YouTube view counts need a plain
+    # API key — the youtube.upload OAuth scope this project holds can't read
+    # statistics. Everything else reuses the Meta/Threads tokens above.
+    youtube_api_key: str = field(default_factory=lambda: _env("YOUTUBE_API_KEY"))
+    insights_enabled: bool = field(
+        default_factory=lambda: _env("INSIGHTS_ENABLED", "true").lower() != "false"
+    )
+    # How many of the best-performing past hooks get shown to Gemini as style
+    # reference, and how many posts must have performance data before any
+    # are shown at all (a handful of posts is noise, not a signal). 0 = off.
+    caption_top_hooks: int = field(
+        default_factory=lambda: int(_env("CAPTION_TOP_HOOKS", "3"))
+    )
+    insights_min_samples: int = field(
+        default_factory=lambda: int(_env("INSIGHTS_MIN_SAMPLES", "5"))
+    )
+
+    # Scheduled posting (the 📅 Jadwalkan button). Hours (0-23, WIB) offered
+    # as "next slot" buttons — whichever upcoming ones are soonest.
+    schedule_slot_hours: tuple[int, ...] = field(
+        default_factory=lambda: tuple(
+            int(h)
+            for h in _env("SCHEDULE_SLOT_HOURS", "7,12,19").split(",")
+            if h.strip().isdigit() and 0 <= int(h) <= 23
+        )
+    )
 
     # Status dashboard (dashboard.py) + Telegram /status and the daily
     # health-check job (see telegram_bot.py). Read-only — never displays
