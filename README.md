@@ -33,6 +33,11 @@ mentahanpov/
 │   ├── gemini.py            # SOP V3 caption/filename/folder generator (JSON)
 │   ├── watermark.py         # master -> watermarked posting copy + story cut
 │   ├── health.py            # integration health checks — backs /status + dashboard.py
+│   ├── cleanup.py           # what's safe to delete from incoming/ + posting copies (bot + scripts/)
+│   ├── heartbeat.py         # liveness file behind the "bot is back after X" message + /heartbeat
+│   ├── insights.py          # per-platform views ~24h/72h after posting; feeds /insights + captions
+│   ├── schedule.py          # time parsing for the 📅 Jadwalkan button
+│   ├── debug_artifacts.py   # carries a failed platform's screenshot to the Telegram chat
 │   └── state.py             # idempotent JSON state log
 ├── assets/                  # watermark-logo.png lives here (auto-placeholder if missing)
 ├── distributors/

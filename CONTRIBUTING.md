@@ -38,6 +38,12 @@ bot-specific concerns (timeouts, status messages, Telegram file handling).
 | `core/google_auth.py` | The one OAuth2 installed-app flow shared by `gdrive.py` and `distributors/youtube.py`. |
 | `core/watermark.py` | Master → watermarked posting copy, and posting copy → trimmed story copy. |
 | `core/state.py` | The only code that reads/writes `state/posts.json`. Atomic writes (`.tmp` + `replace`). |
+| `core/cleanup.py` | What's safe to delete from `incoming/` + `state/posting_copies/`, and nothing else. One definition shared by the bot (after every run / daily / on disk pressure / `/cleanup`) and `scripts/cleanup_storage.py`. `plan()`/`apply()` are the original contract that `scripts/mentahan.sh` (`mentahan cleanup`) calls on the box — keep their signatures; the richer engine is `assess()`/`execute()`/`run()` (pinned by `tests/test_cleanup_legacy_api.py`). Read its docstring before changing a rule — a mistake here deletes footage. |
+| `core/heartbeat.py` | `state/heartbeat.json` liveness file (startup "was down for X" message, dashboard `/heartbeat`, optional dead-man's-switch ping). |
+| `core/insights.py` | Per-platform views/likes ~24h and ~72h after posting, ranking, and the top-hooks handed to `core/gemini.py`. |
+| `core/schedule.py` | Pure time parsing/formatting for the 📅 Jadwalkan button (no Telegram imports, so it's unit-testable). |
+| `core/debug_artifacts.py` | Carries a failing platform's screenshot from the machine that took it to the Telegram chat. |
+| `scripts/` | Operator tools, not imported by the pipeline: `cleanup_storage.py`, `reauth_google.py` (laptop-side Google re-consent), `watchdog.py` (run from a *different* machine; stdlib-only on purpose). |
 | `distributors/*.py` | One file per publish target — see below. |
 | `distributors/meta_graph.py` | Graph API URL-building + Instagram container polling, shared by every FB/IG distributor. |
 | `admin/` | Read-write admin dashboard (`python admin.py`) for `.env`/credential editing and `docker compose`-driven bot/run control — see DEPLOYMENT.md → "Admin dashboard". `admin/env_schema.py` parses `.env.example` at request time instead of hardcoding field names, so the form always matches whatever's actually in `.env.example`. Runs as a separate host process from `dashboard.py` (which stays read-only and containerized) — it needs write access and `docker compose`, neither of which that sandboxed container has on purpose. |
@@ -115,13 +121,25 @@ or otherwise.
 - `from __future__ import annotations` + type hints throughout; keep new
   code consistent.
 - All configuration goes through `config.py`'s `Config` dataclass, backed
-  by `.env`. Don't read `os.environ` anywhere else.
-- No test suite exists yet — this is the biggest structural gap. Every
-  distributor talks to a real, stateful external API (posting a real
-  video), which is why nothing here is easily unit-testable as-is; `--dry-run`
+  by `.env`. Don't read `os.environ` anywhere else. (One deliberate
+  exception: `scripts/watchdog.py` reads its own `WATCHDOG_*` variables,
+  because it runs on a different machine without this repo's
+  dependencies and must stay standard-library only.)
+- Tests live in `tests/` and use only `unittest` (no new dependency):
+  `python -m unittest discover -s tests -t .`. They cover the parts where
+  a bug is both silent and expensive — what cleanup may delete
+  (`test_cleanup.py`), schedule parsing and the bot's schedule/disk-guard
+  flow driven with fake Telegram objects, insights, the TikTok screenshot
+  hand-off, and the watchdog against a local HTTP server. They need the
+  project's `requirements.txt` installed (the bot tests import
+  python-telegram-bot). Distributors still have **no** tests — each talks
+  to a real, stateful external API (posting a real video), so `--dry-run`
   and the `--skip-*` flags are the practical way to exercise a change
-  without reposting. If you're adding one, mocking `requests`/the Google
-  clients at the distributor boundary is the natural seam.
+  without reposting; mocking `requests`/the Google clients at the
+  distributor boundary is the natural seam if you add them.
+- When a test patches `config`, patch the name *in the module under test*
+  (`mock.patch.object(cleanup, "config", ...)`) — `Config` is a frozen
+  dataclass, so setting attributes on the shared instance raises.
 
 ## Where this actually runs
 
