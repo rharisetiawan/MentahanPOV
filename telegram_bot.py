@@ -66,6 +66,7 @@ from core import (
     health,
     heartbeat,
     insights,
+    logsafe,
     video_facts,
 )
 from core import schedule as schedule_lib
@@ -1851,6 +1852,9 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    # httpx logs every request URL at INFO and Telegram's contains the bot
+    # token — without this it lands in `docker logs` on every poll.
+    logsafe.quiet_http_loggers()
     if not config.telegram_bot_token:
         raise SystemExit(
             "TELEGRAM_BOT_TOKEN is empty. See telegram_bot.py's docstring → 'Setup'."

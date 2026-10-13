@@ -25,6 +25,7 @@ from core import (
     gdrive,
     gemini,
     geocode,
+    logsafe,
     state,
     video_facts,
     watermark,
@@ -121,6 +122,9 @@ def setup_logging(verbose: bool) -> None:
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    # --verbose turns on urllib3/httpcore DEBUG, which prints request URLs
+    # including ?access_token=… for the Graph API calls.
+    logsafe.quiet_http_loggers()
 
 
 def parse_args() -> argparse.Namespace:
