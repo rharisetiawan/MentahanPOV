@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import platform
+import re
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -29,9 +32,69 @@ PLATFORM = "tiktok"
 UPLOAD_URL = "https://www.tiktok.com/tiktokstudio/upload?from=upload"
 LOGIN_URL = "https://www.tiktok.com/login"
 
+# Buttons seen on TikTok Studio's own interstitials so far ("Turn on
+# automatic content checks?", "New editing features added", plus common
+# variants of the same idea). TikTok A/B tests and redesigns these without
+# notice, so this list is expected to need new entries over time — if the
+# caption-box-empty error below recurs with a fresh debug screenshot
+# showing an unlisted popup, add its button label here rather than assume
+# the read-back check itself regressed.
+_DISMISS_LABEL_RE = re.compile(
+    r"^(Cancel|Got it|Not now|Not Now|Skip|OK|Dismiss|Close|Maybe later|No thanks)$",
+    re.IGNORECASE,
+)
+
+
+class TikTokPostError(RuntimeError):
+    """A failure with a page screenshot attached.
+
+    worker_service.py ships `screenshot_path`'s bytes back to the HG680 with
+    the error, and main.py (when TikTok runs locally) parks it for the bot —
+    so "what popup was in the way" reaches the Telegram chat instead of
+    sitting in a temp dir on whichever machine happened to run Playwright.
+    """
+
+    def __init__(self, message: str, *, screenshot_path: Path | None = None) -> None:
+        super().__init__(message)
+        self.screenshot_path = screenshot_path
+
+
+def _save_screenshot(page: Any, name: str) -> Path | None:
+    # tempfile.gettempdir(), not a literal /tmp: the worker can be a Windows
+    # machine, where Path("/tmp") silently fails to exist.
+    path = Path(tempfile.gettempdir()) / name
+    try:
+        page.screenshot(path=str(path), full_page=True)
+    except Exception:  # noqa: BLE001 — never let debugging mask the real error
+        log.exception("[tiktok] also failed to save debug screenshot")
+        return None
+    return path
+
 
 def _ensure_storage_dir() -> None:
     config.tiktok_storage_state.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _dismiss_upload_popups(page: Any) -> None:
+    """Best-effort dismissal of interstitials TikTok shows right after a
+    video upload — first confirmed 2026-09-04 via a debug screenshot, then
+    seen recurring 2026-09-10 with a symptom consistent with a different,
+    unlisted popup variant. TikTok keeps rotating which one shows (A/B
+    tests, redesigns), so this matches a broad set of common dismiss-button
+    labels via one regex (see _DISMISS_LABEL_RE) rather than a couple of
+    exact strings, plus an Escape-key fallback for modals with no
+    recognizable button at all. Any of these being absent is the normal
+    case, not an error.
+    """
+    try:
+        page.get_by_role("button", name=_DISMISS_LABEL_RE).first.click(timeout=1_500)
+        log.info("[tiktok] dismissed a popup")
+    except Exception:  # noqa: BLE001 — no matching popup is the common case
+        pass
+    try:
+        page.keyboard.press("Escape")
+    except Exception:  # noqa: BLE001 — best-effort only
+        pass
 
 
 def login() -> None:
@@ -82,6 +145,8 @@ def post(video_path: Path, caption: str, **_: Any) -> dict[str, str]:
         file_input.set_input_files(str(video_path))
         log.info("[tiktok] uploaded file, waiting for processing")
 
+        _dismiss_upload_popups(page)
+
         # Caption box (contenteditable). Selector tends to drift; we try several.
         caption_selectors = [
             'div[contenteditable="true"][role="combobox"]',
@@ -100,24 +165,80 @@ def post(video_path: Path, caption: str, **_: Any) -> dict[str, str]:
         if not caption_box:
             raise RuntimeError("Could not find TikTok caption box.")
 
-        caption_box.click()
+        # force=True: right after upload, TikTok shows a "We'll
+        # automatically check if your video has any unoriginal content"
+        # tooltip that overlaps the caption box and fails Playwright's
+        # pointer-interception check even though it doesn't actually
+        # block a real click — confirmed 2026-09-04 via a debug
+        # screenshot, the caption box itself was visible/enabled/stable
+        # on every retry, only the interception check kept failing.
+        try:
+            caption_box.click(force=True)
+        except Exception as exc:  # noqa: BLE001 — re-raised below, with a screenshot
+            shot = _save_screenshot(page, "tiktok-caption-box-debug.png")
+            log.error("[tiktok] caption box click failed, screenshot: %s", shot)
+            first_line = (str(exc).splitlines() or [type(exc).__name__])[0]
+            raise TikTokPostError(
+                f"Caption box click failed: {first_line}", screenshot_path=shot
+            ) from exc
         # TikTok prepopulates filename → clear it.
-        page.keyboard.press("Control+A")
+        _mod = "Meta" if platform.system() == "Darwin" else "Control"
+        page.keyboard.press(f"{_mod}+A")
         page.keyboard.press("Delete")
         page.keyboard.type(caption, delay=15)
-        log.info("[tiktok] caption entered")
 
-        # Wait until the video finished server-side processing (Post button enabled).
+        # Confirmed 2026-09-05: this used to post successfully with an
+        # EMPTY caption and no exception anywhere — a popup grabbing focus
+        # right after the click (see force=True above) meant the keystrokes
+        # above landed nowhere, and page.keyboard.type() has no way to
+        # notice that on its own. Read the box back and fail loudly instead
+        # of silently publishing a blank caption — a real error here is
+        # infinitely easier to fix than a wrong post already live on TikTok.
+        actual = (caption_box.inner_text() or "").strip()
+        expected = caption.strip()
+        if len(actual) < min(10, len(expected)):
+            debug_path = _save_screenshot(page, "tiktok-caption-empty-debug.png")
+            raise TikTokPostError(
+                f"Caption box has {len(actual)} chars after typing, expected "
+                f"~{len(expected)} — it almost certainly didn't land (a popup "
+                f"probably stole focus). Screenshot: {debug_path}",
+                screenshot_path=debug_path,
+            )
+        log.info("[tiktok] caption entered (%d chars)", len(actual))
+
+        # The Post button doesn't exist in the DOM until TikTok's upload +
+        # processing finishes (confirmed 2026-09-04: a one-shot check right
+        # after typing the caption found nothing, because the video was
+        # still mid-upload behind a progress-bar overlay) — so discovery
+        # itself has to retry over time, same as the "wait for enabled"
+        # step below it. Re-dismiss popups each iteration too: TikTok can
+        # show the content-checks modal again after the caption is typed.
         post_button = None
-        for label in ("Post", "Publish", "Posting", "Upload"):
-            try:
-                post_button = page.get_by_role("button", name=label, exact=False)
-                if post_button.count() > 0:
+        for _ in range(120):  # ~4 minutes
+            _dismiss_upload_popups(page)
+            for label in ("Post", "Publish", "Posting", "Upload"):
+                candidate = page.get_by_role("button", name=label, exact=False)
+                if candidate.count() > 0:
+                    post_button = candidate
                     break
-            except PWTimeout:
-                continue
-        if not post_button or post_button.count() == 0:
-            raise RuntimeError("Could not find TikTok Post button.")
+            if post_button:
+                break
+            time.sleep(2)
+        if not post_button:
+            debug_path = _save_screenshot(page, "tiktok-no-post-button-debug.png")
+            try:
+                all_buttons = page.get_by_role("button").all_text_contents()
+                log.error(
+                    "[tiktok] no Post button found; visible button texts: %r; "
+                    "screenshot saved to %s",
+                    all_buttons,
+                    debug_path,
+                )
+            except Exception:  # noqa: BLE001 — never let debugging mask the real error
+                log.exception("[tiktok] couldn't list the visible buttons")
+            raise TikTokPostError(
+                "Could not find TikTok Post button.", screenshot_path=debug_path
+            )
 
         # Wait for it to become enabled (video processed).
         for _ in range(120):
@@ -127,7 +248,9 @@ def post(video_path: Path, caption: str, **_: Any) -> dict[str, str]:
         else:
             raise TimeoutError("TikTok Post button never became enabled.")
 
-        post_button.first.click()
+        # force=True here too — the same post-upload tooltip (see above)
+        # can still be up by the time this button is clicked.
+        post_button.first.click(force=True)
         log.info("[tiktok] clicked Post; waiting for confirmation")
 
         # Confirmation: navigation to /tiktokstudio/content or a toast.

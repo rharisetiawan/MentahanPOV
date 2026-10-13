@@ -1,0 +1,11 @@
+# These are bind-mounted at runtime (see docker-compose.yml volumes:),
+# so baking them into the image is pure waste - they get shadowed
+# immediately anyway, and incoming/+state/ can be hundreds of MB.
+incoming/
+state/
+credentials/
+.git/
+.venv/
+.venv_check/
+__pycache__/
+*.pyc
