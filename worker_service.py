@@ -38,10 +38,12 @@ import sys
 import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
 from config import config
+from core.authutil import safe_equal
 from distributors import tiktok
 
 log = logging.getLogger("mentahanpov.worker")
@@ -60,11 +62,21 @@ def _screenshot_b64(path: Path | str | None) -> str | None:
     return base64.b64encode(data).decode("ascii")
 
 
+MAX_REQUEST_BYTES = 64 * 1024  # the JSON job body is tiny; the video is fetched by URL
+MAX_VIDEO_BYTES = 1024 * 1024 * 1024  # 1 GiB
+
+
 def _download(url: str, dest: Path) -> None:
+    if urlparse(url).scheme not in ("http", "https"):
+        raise ValueError("video_url must be http(s)")
+    written = 0
     with requests.get(url, stream=True, timeout=120) as resp:
         resp.raise_for_status()
         with dest.open("wb") as f:
             for chunk in resp.iter_content(chunk_size=1 << 20):
+                written += len(chunk)
+                if written > MAX_VIDEO_BYTES:
+                    raise ValueError("video too large")
                 f.write(chunk)
 
 
@@ -85,16 +97,26 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(404, {"status": "error", "error": "not found"})
             return
 
-        length = int(self.headers.get("Content-Length", 0))
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            length = -1
+        if not 0 <= length <= MAX_REQUEST_BYTES:
+            self._send_json(400, {"status": "error", "error": "bad Content-Length"})
+            return
         try:
             payload = json.loads(self.rfile.read(length) or b"{}")
         except json.JSONDecodeError:
             self._send_json(400, {"status": "error", "error": "invalid JSON body"})
             return
+        if not isinstance(payload, dict):
+            self._send_json(400, {"status": "error", "error": "JSON object required"})
+            return
 
-        if config.tiktok_worker_shared_secret and payload.get(
-            "secret"
-        ) != config.tiktok_worker_shared_secret:
+        # Fail closed: an empty configured secret must never mean "no auth".
+        if not safe_equal(payload.get("secret"), config.tiktok_worker_shared_secret) or not (
+            config.tiktok_worker_shared_secret
+        ):
             self._send_json(403, {"status": "error", "error": "bad secret"})
             return
 
@@ -126,6 +148,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def run() -> None:
+    if not config.tiktok_worker_shared_secret:
+        raise SystemExit(
+            "TIKTOK_WORKER_SHARED_SECRET is empty. Set it (same value on both "
+            "boxes) before starting the worker."
+        )
     port = config.tiktok_worker_port
     log.info("[worker] listening on 0.0.0.0:%d/tiktok-job", port)
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
