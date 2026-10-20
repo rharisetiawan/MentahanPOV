@@ -23,6 +23,7 @@ from flask import Flask, Response, request
 
 from config import config
 from core import health, heartbeat, insights
+from core.authutil import safe_equal
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("mentahanpov.dashboard")
@@ -67,7 +68,11 @@ def _require_auth(view):
         if not config.dashboard_password:
             log.warning("[dashboard] DASHBOARD_PASSWORD is empty — refusing to serve")
             return Response("Dashboard misconfigured: DASHBOARD_PASSWORD is empty.", 500)
-        if not auth or auth.username != config.dashboard_user or auth.password != config.dashboard_password:
+        if (
+            not auth
+            or not safe_equal(auth.username, config.dashboard_user)
+            or not safe_equal(auth.password, config.dashboard_password)
+        ):
             return Response(
                 "Login required.", 401,
                 {"WWW-Authenticate": 'Basic realm="MentahanPOV Status"'},

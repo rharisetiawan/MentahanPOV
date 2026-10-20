@@ -38,6 +38,7 @@ from flask_wtf import CSRFProtect
 from werkzeug.utils import secure_filename
 
 from config import config as pipeline_config
+from core.authutil import safe_equal
 
 from . import creds, env_schema, env_store, jobs
 
@@ -87,8 +88,8 @@ def create_app() -> Flask:
                 return Response("Admin dashboard misconfigured: DASHBOARD_PASSWORD is empty.", 500)
             if (
                 not auth
-                or auth.username != pipeline_config.dashboard_user
-                or auth.password != pipeline_config.dashboard_password
+                or not safe_equal(auth.username, pipeline_config.dashboard_user)
+                or not safe_equal(auth.password, pipeline_config.dashboard_password)
             ):
                 return Response(
                     "Login required.",
@@ -156,7 +157,7 @@ def create_app() -> Flask:
     def credentials_upload(key: str):
         sections = _sections()
         field = env_schema.find_field(sections, key)
-        if field is None or field.kind != "path":
+        if field is None or field.kind != "path" or not field.key.endswith(CREDENTIAL_SUFFIXES):
             flash("Field tidak dikenal.", "error")
             return redirect(url_for("credentials_page"))
 
@@ -176,7 +177,8 @@ def create_app() -> Flask:
     def credentials_delete(key: str):
         sections = _sections()
         field = env_schema.find_field(sections, key)
-        if field is None:
+        if field is None or field.kind != "path" or not field.key.endswith(CREDENTIAL_SUFFIXES):
+            flash("Field tidak dikenal.", "error")
             return redirect(url_for("credentials_page"))
         values = _values()
         dest = creds.resolve(values.get(key) or field.default, REPO_ROOT)
@@ -285,6 +287,9 @@ def create_app() -> Flask:
         if file and file.filename:
             INCOMING_DIR.mkdir(parents=True, exist_ok=True)
             filename = secure_filename(file.filename)
+            if not filename:
+                flash("Nama file tidak valid.", "error")
+                return redirect(url_for("run_page"))
             file.save(str(INCOMING_DIR / filename))
         elif video_path_input:
             filename = Path(video_path_input).name

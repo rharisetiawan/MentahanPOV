@@ -37,6 +37,11 @@ def read_current(env_path: Path) -> dict[str, str]:
     return values
 
 
+def _clean(value: str) -> str:
+    """One line only: a newline in a value would inject extra KEY=... lines."""
+    return "".join(value.splitlines())
+
+
 def render(sections: list[env_schema.Section], values: dict[str, str]) -> str:
     known_keys = {f.key for f in env_schema.all_fields(sections)}
     lines = [
@@ -51,14 +56,14 @@ def render(sections: list[env_schema.Section], values: dict[str, str]) -> str:
         for f in section.fields:
             if f.comment:
                 lines.append(f"# {f.comment}")
-            lines.append(f"{f.key}={values.get(f.key, f.default)}")
+            lines.append(f"{f.key}={_clean(values.get(f.key, f.default))}")
         lines.append("")
 
     extra = {k: v for k, v in values.items() if k not in known_keys}
     if extra:
         lines.append("# ---- Custom (not in .env.example) ----")
         for k, v in extra.items():
-            lines.append(f"{k}={v}")
+            lines.append(f"{_clean(k)}={_clean(v)}")
         lines.append("")
 
     return "\n".join(lines)
