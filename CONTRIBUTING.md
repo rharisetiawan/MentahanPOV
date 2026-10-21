@@ -42,7 +42,6 @@ bot-specific concerns (timeouts, status messages, Telegram file handling).
 | `core/heartbeat.py` | `state/heartbeat.json` liveness file (startup "was down for X" message, dashboard `/heartbeat`, optional dead-man's-switch ping). |
 | `core/insights.py` | Per-platform views/likes ~24h and ~72h after posting, ranking, and the top-hooks handed to `core/gemini.py`. |
 | `core/schedule.py` | Pure time parsing/formatting for the 📅 Jadwalkan button (no Telegram imports, so it's unit-testable). |
-| `core/debug_artifacts.py` | Carries a failing platform's screenshot from the machine that took it to the Telegram chat. |
 | `scripts/` | Operator tools, not imported by the pipeline: `cleanup_storage.py`, `reauth_google.py` (laptop-side Google re-consent), `watchdog.py` (run from a *different* machine; stdlib-only on purpose). |
 | `distributors/*.py` | One file per publish target — see below. |
 | `distributors/meta_graph.py` | Graph API URL-building + Instagram container polling, shared by every FB/IG distributor. |
@@ -129,8 +128,7 @@ or otherwise.
   `python -m unittest discover -s tests -t .`. They cover the parts where
   a bug is both silent and expensive — what cleanup may delete
   (`test_cleanup.py`), schedule parsing and the bot's schedule/disk-guard
-  flow driven with fake Telegram objects, insights, the TikTok screenshot
-  hand-off, and the watchdog against a local HTTP server. They need the
+  flow driven with fake Telegram objects, insights, and the watchdog against a local HTTP server. They need the
   project's `requirements.txt` installed (the bot tests import
   python-telegram-bot). Distributors still have **no** tests — each talks
   to a real, stateful external API (posting a real video), so `--dry-run`

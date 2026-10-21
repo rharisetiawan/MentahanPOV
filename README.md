@@ -7,7 +7,7 @@ A local Python pipeline for **MentahanPOV** raw video archive. One command takes
 3. Asks Gemini to produce SOP V3 metadata (title, vibes caption, Drive category, and a standardized filename) as strict JSON — Gemini never invents the facts, only the creative bits.
 4. Uploads the **untouched master** to the matching Drive category folder, renamed to the generated filename.
 5. Renders a watermarked, feed-sized **posting copy** (capped at 1080p, thin logo in the corner) — this is what actually goes out to platforms, never the raw master.
-6. Cross-posts the posting copy to **YouTube Shorts**, **Facebook Page**, **Instagram Reels**, and **TikTok**.
+6. Cross-posts the posting copy to **YouTube Shorts**, **Facebook Page**, and **Instagram Reels** (plus Stories and optional Threads). TikTok is archived — see `archive/tiktok/README.md`.
 7. Persists per-platform status to a JSON state file so reruns only retry the failed ones.
 
 ```text
@@ -37,7 +37,6 @@ mentahanpov/
 │   ├── heartbeat.py         # liveness file behind the "bot is back after X" message + /heartbeat
 │   ├── insights.py          # per-platform views ~24h/72h after posting; feeds /insights + captions
 │   ├── schedule.py          # time parsing for the 📅 Jadwalkan button
-│   ├── debug_artifacts.py   # carries a failed platform's screenshot to the Telegram chat
 │   └── state.py             # idempotent JSON state log
 ├── assets/                  # watermark-logo.png lives here (auto-placeholder if missing)
 ├── distributors/
@@ -47,8 +46,8 @@ mentahanpov/
 │   ├── facebook_story.py    # Graph API /{page}/video_stories (3-phase upload)
 │   ├── instagram.py         # Graph API Reels
 │   ├── instagram_story.py   # Graph API media_type=STORIES
-│   ├── threads.py           # Threads API (separate host/token from Graph API above)
-│   └── tiktok.py            # Playwright (login + post subcommands)
+│   └── threads.py           # Threads API (separate host/token from Graph API above)
+├── archive/tiktok/          # parked TikTok code (Playwright + campus worker)
 ├── prompts/sop_v3.txt       # Gemini prompt template
 ├── requirements.txt
 ├── .env.example
@@ -70,7 +69,6 @@ mentahanpov/
 - `ffmpeg` / `ffprobe` (**required** — used to read date/duration/resolution/GPS straight from the video file)
 - A Google Cloud project (free tier is fine)
 - Meta for Developers account
-- TikTok account
 - A YouTube channel
 
 ## Quick start
@@ -82,14 +80,10 @@ cd mentahanpov
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-playwright install chromium
 
 cp .env.example .env                # then fill it in (see "Setup guide" below)
 mkdir -p credentials state
 # drop credential JSONs into ./credentials/
-
-# one-time TikTok login (opens a real Chrome window)
-python -m distributors.tiktok login
 
 # dry run (gdrive + gemini only, no posting)
 python main.py /path/to/video.mp4 --dry-run
@@ -322,38 +316,13 @@ PLATFORMS=youtube,facebook,instagram,facebook_story,instagram_story,threads
 > `post_url` itself, so the pipeline stages the watermarked posting copy
 > the same way, not the master.
 
-### 7. TikTok (manual by design)
+### 7. TikTok (archived)
 
-**TikTok is deliberately left out of `PLATFORMS`.** Every other platform
-publishes over an API; TikTok has none available here, so posting means
-driving TikTok Studio in a real browser. That rules out the always-on box
-the bot runs on: Playwright ships no official Chromium for ARM64 Linux,
-and the board has ~800MB of free RAM against a heavy single-page app.
-
-Instead the Telegram bot replies with the watermarked file and the
-caption in a one-tap-copy block, so posting is save-and-upload on the
-phone that sent the video — a few seconds, and nothing to break.
-
-The Playwright path below still exists and works **on a desktop**, if you
-want TikTok automated for runs you start from the Mac. It can't serve
-bot-triggered runs.
-
-1. `playwright install chromium` (one-time, already in quick-start).
-2. Run the login helper:
-
-   ```bash
-   python -m distributors.tiktok login
-   ```
-
-   A real Chromium window opens. Log in with your TikTok account (email/Google/Apple — whatever you use). When you can see your avatar in the top-right, switch to the terminal and press **Enter**. Cookies are saved to `credentials/tiktok-storage.json`.
-3. After login is saved you can run headless:
-
-   ```env
-   TIKTOK_STORAGE_STATE=./credentials/tiktok-storage.json
-   TIKTOK_HEADLESS=true
-   ```
-
-> TikTok occasionally redesigns the upload page, which can break selectors. If `post()` raises "Could not find file input / caption box", run the login flow again and watch how the page renders — the selectors at the top of `distributors/tiktok.py` are easy to update.
+TikTok posting was archived on 2026-10-21: the code (Playwright uploader,
+campus worker, failure-screenshot hand-off) lives in `archive/tiktok/`, and
+Playwright is no longer in `requirements.txt`. `archive/tiktok/README.md`
+says how to bring it back. Until then, post to TikTok by hand from the
+watermarked copy.
 
 ### 8. Watermark logo
 
@@ -485,7 +454,7 @@ python main.py VIDEO [--platforms list] [--dry-run] [--skip-gdrive] [--skip-gemi
 
 | Flag | Effect |
 |---|---|
-| `--platforms`      | Subset of `youtube,facebook,instagram,tiktok`. Default = `PLATFORMS` env. |
+| `--platforms`      | Subset of `youtube,facebook,instagram,threads,facebook_story,instagram_story`. Default = `PLATFORMS` env. |
 | `--dry-run`        | Run facts + geocode + Gemini + GDrive, **skip** watermark render + all distribution. |
 | `--skip-gdrive`    | Reuse `gdrive_url` from state (re-run after fixing a single platform). |
 | `--skip-gemini`    | Reuse caption/file_name/folder from state. |
@@ -538,7 +507,7 @@ version:
 4. If it's a Story-type destination (24h expiry, no permanent caption), add its name to `STORY_PLATFORMS` so it gets the trimmed/story copy instead of the feed copy.
 5. Facebook/Instagram distributors share Graph API plumbing — see `distributors/meta_graph.py` (`graph_url`, `wait_container_finished`) before writing new Graph API calls from scratch.
 
-- Swap the TikTok Playwright module for an HTTP client once your Content Posting API app is approved.
+- Bring TikTok back from `archive/tiktok/` as an HTTP client once a Content Posting API app is approved.
 - For larger Reels, upload first to S3/R2 instead of Drive and pass that URL through `extra_urls` in `main.py`'s `step_publish_urls`.
 
 ## Security notes

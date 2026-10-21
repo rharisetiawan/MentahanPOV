@@ -22,14 +22,14 @@ def _env(key: str, default: str | None = None, *, required: bool = False) -> str
     return val or ""
 
 
-def _tiktok_enabled() -> bool:
-    # Temporarily off by default: the automated TikTok hop keeps timing out.
-    # Set TIKTOK_ENABLED=true in .env to bring it back.
-    return _env("TIKTOK_ENABLED", "false").lower() == "true"
+# Platforms whose code now lives in archive/ (see archive/tiktok/README.md).
+# Still dropped from PLATFORMS/TELEGRAM_PLATFORMS so an older .env that
+# lists them doesn't make every run report an "unknown platform".
+ARCHIVED_PLATFORMS = frozenset({"tiktok"})
 
 
 def _drop_disabled(platforms: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(p for p in platforms if p != "tiktok" or _tiktok_enabled())
+    return tuple(p for p in platforms if p not in ARCHIVED_PLATFORMS)
 
 
 @dataclass(frozen=True)
@@ -149,43 +149,6 @@ class Config:
         default_factory=lambda: _env("THREADS_API_VERSION", "v1.0")
     )
 
-    # TikTok — local Playwright (distributors/tiktok.py), for runs started
-    # by hand on a desktop that actually has Chromium available.
-    tiktok_enabled: bool = field(default_factory=_tiktok_enabled)
-    tiktok_storage_state: Path = field(
-        default_factory=lambda: Path(
-            _env("TIKTOK_STORAGE_STATE", "./credentials/tiktok-storage.json")
-        )
-    )
-    tiktok_headless: bool = field(
-        default_factory=lambda: _env("TIKTOK_HEADLESS", "false").lower() == "true"
-    )
-
-    # TikTok — remote worker (distributors/tiktok_remote.py), for
-    # bot-triggered runs on hardware that can't run Playwright itself (see
-    # DEPLOYMENT.md -> "TikTok remote worker"). Talks directly to
-    # worker_service.py over HTTP on the Tailscale mesh both boxes join —
-    # replaced the earlier Telegram-group relay after discovering Telegram
-    # bots silently can't see messages sent by *other* bots (confirmed
-    # 2026-09-04: the main bot's job postings never reached the worker
-    # bot's getUpdates, in either direction), which made that design
-    # non-functional from the day it was built.
-    tiktok_worker_host: str = field(
-        default_factory=lambda: _env("TIKTOK_WORKER_HOST")
-    )
-    tiktok_worker_port: int = field(
-        default_factory=lambda: int(_env("TIKTOK_WORKER_PORT", "8790"))
-    )
-    # Shared secret both sides read from the same env var — Tailscale
-    # already restricts who can reach the port at all, this just stops
-    # any other device on the same tailnet from queuing jobs.
-    tiktok_worker_shared_secret: str = field(
-        default_factory=lambda: _env("TIKTOK_WORKER_SHARED_SECRET")
-    )
-    tiktok_remote_timeout_s: int = field(
-        default_factory=lambda: int(_env("TIKTOK_REMOTE_TIMEOUT_S", "600"))
-    )
-
     # Telegram bot front-end (see telegram_bot.py)
     telegram_bot_token: str = field(
         default_factory=lambda: _env("TELEGRAM_BOT_TOKEN")
@@ -226,9 +189,8 @@ class Config:
                 p.strip()
                 for p in _env(
                     "PLATFORMS",
-                    # TikTok and Threads are opt-in: TikTok needs a one-off
-                    # Playwright login, Threads needs its own separately-issued
-                    # access token — listing either before that setup is done
+                    # Threads is opt-in: it needs its own separately-issued
+                    # access token — listing it before that setup is done
                     # makes every run report a failure. Add "threads" here (or
                     # to TELEGRAM_PLATFORMS) once THREADS_USER_ID/ACCESS_TOKEN
                     # are set.

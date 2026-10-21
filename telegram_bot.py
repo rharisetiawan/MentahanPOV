@@ -62,7 +62,6 @@ from telegram.ext import (
 from config import config
 from core import (
     cleanup,
-    debug_artifacts,
     health,
     heartbeat,
     insights,
@@ -118,7 +117,6 @@ _STAGE_PATTERNS: list[tuple[str, str]] = [
     ("[facebook] OK", "✅ Facebook beres, lanjut ke platform berikutnya..."),
     ("[instagram] posting", "📤 Posting ke Instagram..."),
     ("[instagram] OK", "✅ Instagram beres..."),
-    ("[tiktok] posting", "📤 Posting ke TikTok..."),
     ("[facebook_story] posting", "📱 Posting Story Facebook..."),
     ("[facebook_story] OK", "✅ Story Facebook beres..."),
     ("[instagram_story] posting", "📱 Posting Story Instagram..."),
@@ -794,11 +792,6 @@ async def handle_confirm_callback(
 
         entry = pipeline_state.get(config.state_file, video_path)
         await _send_caption_recap(query.message, entry.get("caption", ""))
-        if (
-            platform == "tiktok"
-            and entry.get("platforms", {}).get("tiktok", {}).get("status") != "ok"
-        ):
-            await _send_tiktok_debug(query.message, key)
         await _send_retry_keyboard(query.message, video_path, entry)
         await _after_run()
         return
@@ -858,32 +851,15 @@ async def _execute_post(
 
     entry = pipeline_state.get(config.state_file, video_path)
     await _send_caption_recap(message, entry.get("caption", ""))
-    if (
-        "tiktok" in selected
-        and entry.get("platforms", {}).get("tiktok", {}).get("status") != "ok"
-    ):
-        # Only the manual fallback: an automated TikTok post (see
-        # distributors/tiktok_remote.py) already shows up in `result`
-        # above like any other platform — sending the kit on top of a
-        # real success would just be confusing leftover-menu noise.
-        # "tiktok" not in `selected` means it was deliberately
-        # unticked on the confirmation screen, not that it failed —
-        # sending the manual-post kit for that would be unwanted.
-        #
-        # The screenshot goes first: it says *why* it failed, which is
-        # the thing worth reading before deciding to post by hand.
-        await _send_tiktok_debug(message, key)
-        await _send_tiktok_kit(message, video_path)
     await _send_retry_keyboard(message, video_path, entry)
     await _after_run()
 
 
 async def _after_run() -> None:
-    """Housekeeping once a run is over: drop uncollected screenshots and let
-    cleanup reclaim whatever that run just made safe to delete. Never raises
-    — a failure here must not look like the post itself failed."""
+    """Housekeeping once a run is over: let cleanup reclaim whatever that run
+    just made safe to delete. Never raises — a failure here must not look
+    like the post itself failed."""
     try:
-        debug_artifacts.prune()
         if config.auto_cleanup and not _PIPELINE_LOCK.locked():
             report = await asyncio.to_thread(cleanup.run, apply_changes=True)
             if report.deleted:
@@ -894,37 +870,6 @@ async def _after_run() -> None:
                 )
     except Exception:  # noqa: BLE001
         log.exception("[bot] post-run housekeeping failed")
-
-
-async def _send_tiktok_debug(message, key: str) -> None:
-    """Show the page TikTok Studio was actually displaying when it failed.
-
-    The worker attaches a screenshot to its error (worker_service.py) and
-    main.py parks it (core/debug_artifacts.py). This used to need an SSH
-    session on the campus box just to find out which popup was in the way.
-    """
-    path = debug_artifacts.take(key, "tiktok")
-    if path is None:
-        return
-    caption = (
-        "📸 Ini yang kelihatan di TikTok Studio waktu gagal — "
-        "cek ada popup/perubahan layout apa."
-    )
-    try:
-        try:
-            with path.open("rb") as fh:
-                await message.reply_photo(photo=fh, caption=caption)
-        except telegram_error.BadRequest:
-            # Photos have a size/aspect limit that a tall full-page capture
-            # can exceed; as a document it's always accepted.
-            with path.open("rb") as fh:
-                await message.reply_document(
-                    document=fh, filename=path.name, caption=caption
-                )
-    except Exception:  # noqa: BLE001 — the post result already went out
-        log.exception("[bot] failed to send TikTok debug screenshot")
-    finally:
-        debug_artifacts.clear(key, "tiktok")
 
 
 async def handle_text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -962,8 +907,8 @@ async def _send_caption_recap(message, caption: str) -> None:
     """Always resend the caption as a one-tap-copy block after a post or a
     retry, success or not.
 
-    Not conditional on a visible failure — the TikTok empty-caption bug
-    (2026-09-05) posted successfully with no caption and *no error
+    Not conditional on a visible failure — the (now archived) TikTok
+    empty-caption bug (2026-09-05) posted successfully with no caption and *no error
     anywhere*, so gating this on "something looked wrong" would have
     missed exactly the case it exists for. Having the real caption in the
     chat every time means a silent miss on any platform is still just a
@@ -1001,48 +946,6 @@ async def _send_retry_keyboard(message, video_path: Path, entry: dict) -> None:
         "Ada platform yang gagal — retry satu-satu tanpa ngulang yang lain:",
         reply_markup=InlineKeyboardMarkup(rows),
     )
-
-
-async def _send_tiktok_kit(message, source_video: Path) -> None:
-    """Fallback only: send the watermarked file + caption so TikTok can be
-    posted by hand from the phone that's already in your hand.
-
-    Only called when TikTok's automated path (distributors/tiktok_remote.py
-    when TIKTOK_WORKER_HOST is set, distributors/tiktok.py when a local
-    Playwright/Chromium is available) either isn't configured for this run
-    or actually failed — a successful automated post already shows up in
-    the normal per-platform result text, so sending this on top of that
-    would just be confusing leftover-menu noise from before the remote
-    worker existed.
-    """
-    entry = pipeline_state.get(config.state_file, source_video)
-    caption = entry.get("caption")
-    copy_path = entry.get("posting_copy_path")
-    if not caption or not copy_path:
-        return
-    # State stores this relative to the repo root; resolve it explicitly so
-    # the lookup doesn't depend on the bot's working directory.
-    copy_file = Path(copy_path)
-    if not copy_file.is_absolute():
-        copy_file = REPO_ROOT / copy_file
-    if not copy_file.exists():
-        log.warning("[bot] posting copy missing, skipping TikTok kit: %s", copy_file)
-        return
-
-    try:
-        with copy_file.open("rb") as fh:
-            await message.reply_document(
-                document=fh,
-                filename=copy_file.name,
-                caption="📱 Buat TikTok — simpan video ini, captionnya di bawah 👇",
-            )
-        # <pre> gives Telegram's one-tap copy button, and escaping means the
-        # caption's own punctuation can't break the markup.
-        await message.reply_text(
-            f"<pre>{html.escape(caption)}</pre>", parse_mode="HTML"
-        )
-    except Exception:  # noqa: BLE001 — the pipeline already succeeded
-        log.exception("[bot] failed to send TikTok kit")
 
 
 def _format_health_report(results: list[health.CheckResult]) -> str:
@@ -1697,16 +1600,14 @@ async def daily_cleanup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         log.info("[bot] daily cleanup skipped: a run is in progress")
         return
     try:
-        pruned = debug_artifacts.prune()
         report = await asyncio.to_thread(cleanup.run, apply_changes=True)
     except Exception:  # noqa: BLE001
         log.exception("[bot] daily cleanup failed")
         return
     log.info(
-        "[bot] daily cleanup: %d file(s), %s freed, %d old screenshot(s) pruned",
+        "[bot] daily cleanup: %d file(s), %s freed",
         report.deleted,
         cleanup.fmt_bytes(report.freed_bytes),
-        pruned,
     )
     if report.deleted:
         await _notify(
@@ -1867,8 +1768,7 @@ def main() -> None:
         # getFile against a Local Bot API Server blocks while that server
         # pulls the whole file from Telegram — minutes for the untouched HD
         # masters this is built for. The library's 5s default aborts long
-        # before that and the video is silently dropped. Sending the TikTok
-        # kit back pushes tens of MB the other way, hence the write budget.
+        # before that and the video is silently dropped.
         .connect_timeout(30)
         .read_timeout(900)
         .write_timeout(900)

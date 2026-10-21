@@ -3,7 +3,7 @@
 The merge combined two independent implementations of the same ideas (disk
 cleanup, /cleanup, daily job, disk alert). The failure mode that tests rarely
 catch there is *wiring*: a handler or job registered twice, or one of them
-silently dropped. These pin the final wiring, and the deployed TikTok switch.
+silently dropped. These pin the final wiring, and that the archived TikTok stays out.
 """
 
 from __future__ import annotations
@@ -105,38 +105,19 @@ class MainWiringTests(unittest.TestCase):
         self.assertIn("housekeeping", names, "the heartbeat must always run")
 
 
-class TikTokSwitchStillWorksTests(unittest.TestCase):
-    """b81febb's TIKTOK_ENABLED, which the merged code must not regress."""
+class TikTokArchivedTests(unittest.TestCase):
+    """TikTok lives in archive/tiktok/ — it must not leak back into the wiring."""
 
-    def test_disabled_drops_tiktok_from_configured_lists(self) -> None:
-        with mock.patch.dict("os.environ", {"TIKTOK_ENABLED": "false"}):
-            self.assertEqual(
-                _drop_disabled(("youtube", "tiktok", "facebook")), ("youtube", "facebook")
-            )
+    def test_configured_lists_drop_tiktok(self) -> None:
+        self.assertEqual(
+            _drop_disabled(("youtube", "tiktok", "facebook")), ("youtube", "facebook")
+        )
 
-    def test_enabled_keeps_tiktok(self) -> None:
-        with mock.patch.dict("os.environ", {"TIKTOK_ENABLED": "true"}):
-            self.assertIn("tiktok", _drop_disabled(("youtube", "tiktok")))
-
-    def test_registry_and_keyboard_follow_the_switch(self) -> None:
-        if pipeline_main.config.tiktok_enabled:
-            self.skipTest("TIKTOK_ENABLED=true in this environment")
+    def test_registry_and_keyboard_have_no_tiktok(self) -> None:
         self.assertNotIn("tiktok", pipeline_main.PLATFORM_REGISTRY)
         keyboard = bot._confirmation_keyboard("abc123def456", {"youtube"})
         labels = [b.text for row in keyboard.inline_keyboard for b in row]
-        self.assertFalse(any("tiktok" in label for label in labels), labels)
-
-    def test_no_config_check_noise_for_a_deliberately_disabled_tiktok(self) -> None:
-        cfg = SimpleNamespace(
-            threads_user_id="",
-            threads_access_token="",
-            tiktok_enabled=False,
-            tiktok_worker_host="100.71.198.45",  # credentials present, switched off
-            tiktok_storage_state=Path("nonexistent.json"),
-        )
-        with mock.patch.object(pipeline_main, "config", cfg):
-            with self.assertNoLogs("mentahanpov", level="WARNING"):
-                pipeline_main._warn_unselected_but_configured(["youtube"])
+        self.assertFalse(any("tiktok" in label.lower() for label in labels), labels)
 
 
 if __name__ == "__main__":

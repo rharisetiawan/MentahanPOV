@@ -1,4 +1,6 @@
 target-version = "py310"
+# Parked code keeps its old import layout; lint it again when restoring it.
+extend-exclude = ["archive"]
 line-length = 88
 
 [lint]

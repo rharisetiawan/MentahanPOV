@@ -13,9 +13,6 @@ google-auth-httplib2>=0.2.0
 # Gemini (google-generativeai is deprecated; google-genai is its replacement)
 google-genai>=0.3.0
 
-# TikTok (browser automation fallback)
-playwright>=1.42.0
-
 # Telegram bot front-end (telegram_bot.py)
 # [job-queue] extra pulls in APScheduler, needed for the daily /status
 # report (telegram_bot.py's daily_status_job via job_queue.run_daily).

@@ -489,6 +489,9 @@ Run `/insights refresh` after the first day and read what comes back.
 
 ## TikTok failures now show their screenshot
 
+> **Archived 2026-10-21.** TikTok is parked in `archive/tiktok/` (see its
+> README); the files named below now live there. Kept for reference.
+
 When the TikTok worker fails, it ships its page screenshot back with the
 error (`worker_service.py` → `distributors/tiktok_remote.py` →
 `core/debug_artifacts.py`), and the bot posts it in the chat next to the
@@ -618,6 +621,9 @@ can rewrite every credential the pipeline uses. Requires a
 everything else that isn't bind-mounted).
 
 ## TikTok remote worker
+
+> **Archived 2026-10-21.** TikTok is parked in `archive/tiktok/` (see its
+> README); the files named below now live there. Kept for reference.
 
 Added 2026-09-02, redesigned 2026-09-04. The HG680P is an ARM board with
 limited RAM — it can't run Playwright/Chromium (the only working TikTok
