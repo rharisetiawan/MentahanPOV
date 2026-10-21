@@ -32,7 +32,7 @@ diff to get them back):
 ## Bringing it back
 
 1. `git mv` each file above back to its old path.
-2. Revert the wiring with `git show <archiving commit> -- main.py telegram_bot.py config.py .env.example requirements.txt`
+2. Revert the wiring with `git show b33b700 -- main.py telegram_bot.py config.py .env.example requirements.txt`
    as a guide (or `git revert` that commit if nothing else changed there).
 3. Put `playwright` back in `requirements.txt` if the bot box should run it
    locally; the campus worker only needs `requirements-worker.txt`.
