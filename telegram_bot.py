@@ -42,7 +42,9 @@ import asyncio
 import datetime
 import html
 import logging
+import os
 import re
+import signal
 import sys
 import time
 from pathlib import Path
@@ -363,6 +365,26 @@ class LiveStatus:
             await self._message.reply_text(text, disable_web_page_preview=True)
 
 
+def _kill_run(proc: asyncio.subprocess.Process) -> None:
+    """Kill main.py *and* what it spawned (ffmpeg renders).
+
+    A plain proc.kill() only hits main.py, leaving an orphaned ffmpeg
+    eating the box's CPU for minutes. On POSIX the run gets its own
+    session (see _run_pipeline), so its whole process group goes at once.
+    """
+    if proc.returncode is not None:
+        return
+    if hasattr(os, "killpg"):
+        try:
+            os.killpg(proc.pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+            return
+        except ProcessLookupError:
+            return
+        except OSError:
+            pass  # fall back to killing just main.py
+    proc.kill()
+
+
 async def _run_pipeline(
     video_path: Path, status: LiveStatus, *, extra_args: tuple[str, ...] = ()
 ) -> str:
@@ -387,6 +409,8 @@ async def _run_pipeline(
             cwd=REPO_ROOT,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            # Own process group, so _kill_run can take ffmpeg down with it.
+            start_new_session=os.name == "posix",
         )
         # Lets a "🛑 Stop" tap on a *different* update find this process —
         # see handle_confirm_callback's "stop" branch. run_info is kept as
@@ -426,7 +450,7 @@ async def _run_pipeline(
             await asyncio.wait_for(_read_stream(), timeout=PIPELINE_TIMEOUT_S)
             returncode = await proc.wait()
         except asyncio.TimeoutError:
-            proc.kill()
+            _kill_run(proc)
             await proc.wait()
             minutes = PIPELINE_TIMEOUT_S // 60
             return _format_partial_result(
@@ -519,9 +543,13 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
             status.set(
                 "🔍 Cek metadata + siapin caption (dry-run)...",
-                note="Biasanya 1-3 menit: metadata → Gemini → upload master ke Drive.",
+                note="Biasanya 1-3 menit: metadata → Gemini → upload master ke Drive"
+                + (" (watermark dirender sekalian)." if config.prerender_posting_copy else "."),
             )
-            result = await _run_pipeline(local_path, status, extra_args=("--dry-run",))
+            dry_run_args = ("--dry-run",)
+            if config.prerender_posting_copy:
+                dry_run_args += ("--prerender",)
+            result = await _run_pipeline(local_path, status, extra_args=dry_run_args)
         except Exception as exc:  # noqa: BLE001 — report, don't crash the bot
             log.exception("[bot] dry-run crashed")
             await status.finish(f"💥 Error gak terduga: {type(exc).__name__}: {exc}")
@@ -721,7 +749,7 @@ async def handle_confirm_callback(
         active = _ACTIVE_RUN
         if active and active.get("key") == key:
             active["stopped"] = True
-            active["proc"].kill()  # type: ignore[union-attr]
+            _kill_run(active["proc"])  # type: ignore[arg-type]
         else:
             await query.message.reply_text(
                 "Udah kelar, atau bukan proses yang lagi jalan."
@@ -831,19 +859,23 @@ async def _execute_post(
     async with LiveStatus(status_msg, "Bersiap posting...", stop_key=key) as status:
         status.set(
             "⚙️ Mulai posting...",
-            note="Watermark → posting ke platform, biasanya 2-4 menit.",
+            note=(
+                "Posting ke platform, biasanya 1-3 menit."
+                if config.prerender_posting_copy
+                else "Watermark → posting ke platform, biasanya 2-4 menit."
+            ),
         )
+        extra_args: tuple[str, ...] = (
+            "--skip-gdrive",
+            "--skip-gemini",
+            "--platforms",
+            ",".join(sorted(selected)),
+        )
+        if config.prerender_posting_copy:
+            # The dry-run already rendered it; a missing file still re-renders.
+            extra_args += ("--skip-watermark",)
         try:
-            result = await _run_pipeline(
-                video_path,
-                status,
-                extra_args=(
-                    "--skip-gdrive",
-                    "--skip-gemini",
-                    "--platforms",
-                    ",".join(sorted(selected)),
-                ),
-            )
+            result = await _run_pipeline(video_path, status, extra_args=extra_args)
         except Exception as exc:  # noqa: BLE001 — report, don't crash the bot
             log.exception("[bot] confirmed pipeline run crashed")
             result = f"💥 Error gak terduga: {type(exc).__name__}: {exc}"

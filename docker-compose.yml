@@ -17,11 +17,14 @@ services:
     # Named explicitly so `dashboard` below can reuse this exact image
     # instead of building its own — same Dockerfile, same context, same
     # code, only the command differs. Building it twice used to produce
-    # two full copies of the unpacked image (ffmpeg + playwright + all of
+    # two full copies of the unpacked image (ffmpeg + all of
     # requirements.txt), which is what ran this box's small /www
     # partition out of space. One build now serves both.
     image: mentahanpov-app:latest
     restart: unless-stopped
+    # tini as PID 1 reaps the ffmpeg/main.py children a 🛑 Stop or a
+    # timeout kills, instead of leaving zombies under the bot process.
+    init: true
     # This box's IPv6 route is broken (has AAAA records, no actual path —
     # connects fail with "Network is unreachable"), which intermittently
     # took down Gemini/Drive/Graph API calls depending on which address

@@ -119,6 +119,14 @@ def make_posting_copy(video_path: Path, *, output_path: Path) -> Path:
         "23",
         "-preset",
         "veryfast",
+        # 8-bit 4:2:0: a 10-bit (HDR) phone master would otherwise come out
+        # as High 10 profile, which Meta/YouTube re-transcode or reject.
+        "-pix_fmt",
+        "yuv420p",
+        # moov atom up front so platforms that fetch by URL (Instagram via
+        # the Drive staging link) can start reading before the end arrives.
+        "-movflags",
+        "+faststart",
         "-c:a",
         "aac",
         "-b:a",

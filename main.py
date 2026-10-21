@@ -107,6 +107,12 @@ def parse_args() -> argparse.Namespace:
         help="Run gdrive + gemini only; skip distribution.",
     )
     p.add_argument(
+        "--prerender",
+        action="store_true",
+        help="With --dry-run: also render the posting copy, in parallel with "
+        "Gemini + Drive, so a later --skip-watermark run can reuse it.",
+    )
+    p.add_argument(
         "--skip-gdrive", action="store_true", help="Reuse gdrive_url from state file."
     )
     p.add_argument(
@@ -340,16 +346,32 @@ def main() -> int:
     else:
         log.info("Location: none in file metadata (line omitted from caption)")
 
-    gemini_out = step_gemini(video, facts, address, coordinates, skip=args.skip_gemini)
-    log.info("Folder: %s | file_name: %s", gemini_out.folder, gemini_out.file_name)
-    log.info("Caption (%d chars):\n%s", len(gemini_out.caption), gemini_out.caption)
+    with ThreadPoolExecutor(max_workers=1) as prerender_pool:
+        # ffmpeg is the slowest CPU step on the HG680, Gemini + Drive are
+        # network-bound: overlapping them means ✅ Post only has to publish.
+        prerender = (
+            prerender_pool.submit(step_watermark, video, skip=False)
+            if args.dry_run and args.prerender
+            else None
+        )
 
-    gdrive_url = step_gdrive(video, gemini_out, skip=args.skip_gdrive)
-    log.info("GDrive URL: %s", gdrive_url)
+        gemini_out = step_gemini(
+            video, facts, address, coordinates, skip=args.skip_gemini
+        )
+        log.info("Folder: %s | file_name: %s", gemini_out.folder, gemini_out.file_name)
+        log.info("Caption (%d chars):\n%s", len(gemini_out.caption), gemini_out.caption)
 
-    if args.dry_run:
-        log.info("--dry-run set; skipping watermark render + distribution.")
-        return 0
+        gdrive_url = step_gdrive(video, gemini_out, skip=args.skip_gdrive)
+        log.info("GDrive URL: %s", gdrive_url)
+
+        if args.dry_run:
+            if prerender is not None:
+                try:
+                    log.info("Posting copy pre-rendered: %s", prerender.result())
+                except Exception:  # noqa: BLE001 — the post re-renders it anyway
+                    log.warning("[watermark] pre-render failed", exc_info=True)
+            log.info("--dry-run set; skipping distribution.")
+            return 0
 
     post_video = step_watermark(video, skip=args.skip_watermark)
     log.info("Posting copy ready: %s", post_video)

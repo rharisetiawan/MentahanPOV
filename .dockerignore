@@ -9,3 +9,7 @@ credentials/
 .venv_check/
 __pycache__/
 *.pyc
+# Not needed at runtime: parked code, session logs, tests.
+archive/
+logs/
+tests/

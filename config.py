@@ -216,6 +216,12 @@ class Config:
         default_factory=lambda: _env("AUTO_CLEANUP", "true").lower() != "false"
     )
     cleanup_hour: int = field(default_factory=lambda: int(_env("CLEANUP_HOUR", "4")))
+    # Bot dry-runs render the watermarked posting copy in parallel with the
+    # (network-bound) Gemini + Drive steps, so ✅ Post only has to publish.
+    # Turn off if the box runs short of RAM while both happen at once.
+    prerender_posting_copy: bool = field(
+        default_factory=lambda: _env("PRERENDER_POSTING_COPY", "true").lower() != "false"
+    )
     # A video that was dry-run (master already on Drive) but never posted,
     # scheduled, or cancelled can be deleted locally after this many days —
     # what ❌ Batal would have done. OFF by default (0): replaying the box's
