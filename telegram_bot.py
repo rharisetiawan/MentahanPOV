@@ -68,6 +68,7 @@ from core import (
     heartbeat,
     insights,
     logsafe,
+    threads_token,
     video_facts,
 )
 from core import schedule as schedule_lib
@@ -1627,6 +1628,31 @@ async def housekeeping_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         log.exception("[bot] housekeeping failed")
 
 
+async def threads_token_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Daily: renew the Threads token well before it lapses (core/threads_token.py).
+
+    Silent unless it fails — a failure is worth a message, because left
+    alone every Threads post starts failing once the old token expires.
+    """
+    if not await asyncio.to_thread(threads_token.needs_refresh):
+        return
+    try:
+        left = await asyncio.to_thread(threads_token.refresh)
+    except Exception as exc:  # noqa: BLE001 — refresh() messages are token-free
+        log.warning("[bot] Threads token refresh failed: %s", exc)
+        await _notify(
+            context.bot,
+            f"⚠️ Token Threads gagal diperpanjang otomatis ({exc}). Kalau "
+            "token lama habis, posting ke Threads bakal gagal — perpanjang "
+            "manual (README → Threads). Dicoba lagi besok.",
+        )
+        return
+    log.info(
+        "[bot] Threads token renewed (%s)",
+        "no expiry given" if left is None else f"{left:.0f} days left",
+    )
+
+
 async def daily_cleanup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     if _PIPELINE_LOCK.locked():
         log.info("[bot] daily cleanup skipped: a run is in progress")
@@ -1887,6 +1913,14 @@ def main() -> None:
             )
         if config.insights_enabled:
             app.job_queue.run_repeating(insights_job, interval=3600, first=300)
+        if getattr(config, "threads_user_id", "") and getattr(
+            config, "threads_access_token", ""
+        ):
+            # Interval, not a fixed hour: this box is off for days at a
+            # time, and a run_daily slot it happens to miss never catches up.
+            app.job_queue.run_repeating(
+                threads_token_job, interval=24 * 3600, first=600, name="threads_token"
+            )
         restored = _restore_schedules(app)
         if restored:
             log.info("[bot] restored %d scheduled post(s)", restored)

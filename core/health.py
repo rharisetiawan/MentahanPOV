@@ -23,7 +23,7 @@ from pathlib import Path
 import requests
 
 from config import config
-from core import cleanup, google_auth
+from core import cleanup, google_auth, threads_token
 
 # Import lazily inside functions where the module has heavier deps
 # (google-genai) so a health check on one integration never fails because
@@ -177,7 +177,7 @@ def check_threads() -> CheckResult:
         label="Threads",
         host="graph.threads.net",
         version=config.threads_api_version,
-        token=config.threads_access_token,
+        token=threads_token.current(),
     )
 
 

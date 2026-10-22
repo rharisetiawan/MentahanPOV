@@ -148,6 +148,13 @@ class Config:
     threads_api_version: str = field(
         default_factory=lambda: _env("THREADS_API_VERSION", "v1.0")
     )
+    # Where the bot keeps the token it refreshes itself (core/threads_token.py).
+    # Takes precedence over THREADS_ACCESS_TOKEN once it exists.
+    threads_token_file: Path = field(
+        default_factory=lambda: Path(
+            _env("THREADS_TOKEN_FILE", "./credentials/threads-token.json")
+        )
+    )
 
     # Telegram bot front-end (see telegram_bot.py)
     telegram_bot_token: str = field(

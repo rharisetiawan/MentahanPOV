@@ -36,6 +36,8 @@ class MainWiringTests(unittest.TestCase):
             cleanup_hour=4,
             heartbeat_interval_min=5,
             insights_enabled=True,
+            threads_user_id="42",
+            threads_access_token="th-token",
             state_file=Path(tmp.name) / "posts.json",
         )
         captured: dict = {}
@@ -59,6 +61,7 @@ class MainWiringTests(unittest.TestCase):
             "disk_watch_job",  # 6-hourly disk alert (deployed in b81febb)
             "daily_status_job",  # 08:00 WIB report
             "insights_job",
+            "threads_token",  # daily Threads token renewal
         }
         self.assertEqual(set(names), expected)
         self.assertEqual(len(names), len(set(names)), f"duplicate job in {names}")

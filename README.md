@@ -294,6 +294,12 @@ THREADS_API_VERSION=v1.0
 > compare `expires_at` to `issued_at`). Refresh before expiry with:
 > `curl -s "https://graph.threads.net/refresh_access_token?grant_type=th_refresh_token&access_token=<CURRENT_TOKEN>"`
 > — no need to repeat steps 1-5, the tester relationship persists.
+>
+> The bot does this refresh itself (`core/threads_token.py`): once a day it
+> renews the token when fewer than 30 days are left and stores it in
+> `THREADS_TOKEN_FILE`, which then takes precedence over `.env`. It only
+> messages you if a renewal fails. A token that already expired can
+> not be renewed: get a new one (step 5) and delete that file.
 
 > **If you don't administer the Threads account yourself** (e.g. it
 > belongs to a client), the Tester flow above can't work — they'd have to

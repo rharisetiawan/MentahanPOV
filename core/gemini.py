@@ -176,6 +176,15 @@ def _generate_and_parse(
     return data, raw
 
 
+def _delete_upload(client: genai.Client, file: genai_types.File) -> None:
+    """Don't leave the raw master on Google's servers for the File API's 48h
+    (it also counts against the project's 20 GB File API quota)."""
+    try:
+        client.files.delete(name=file.name)
+    except Exception:  # noqa: BLE001 — it expires on its own anyway
+        log.warning("[gemini] couldn't delete uploaded file %s", file.name, exc_info=True)
+
+
 def generate_metadata(
     video_path: Path,
     *,
@@ -190,52 +199,54 @@ def generate_metadata(
     client = genai.Client(api_key=config.gemini_api_key)
 
     file = _upload_and_wait(client, video_path)
-
     try:
-        # Imported here, not at module top: insights pulls in requests and
-        # the Graph helpers, which a caption run shouldn't hard-depend on —
-        # and a bug in the feedback loop must never block captioning.
-        from core import insights
-
-        top_hooks = insights.top_hooks()
-    except Exception:  # noqa: BLE001 — optional enrichment, never fatal
-        log.exception("[gemini] couldn't load top hooks; continuing without")
-        top_hooks = []
-    if top_hooks:
-        log.info("[gemini] using %d proven hook(s) as style reference", len(top_hooks))
-
-    prompt = _load_prompt(
-        date=date,
-        address=address,
-        coordinates=coordinates,
-        duration_s=duration_s,
-        resolution=resolution,
-        top_hooks=top_hooks,
-    )
-
-    # A "high demand" 503 tends to be specific to one model's capacity
-    # pool — often the newest release, which is where demand spikes
-    # concentrate — so a model that's still fully capable but not the one
-    # everyone's currently hammering is a free way to ride it out instead
-    # of just waiting. Only kicks in once GEMINI_MODEL has exhausted its
-    # own retries above; same file, no re-upload either way.
-    models = [config.gemini_model]
-    if config.gemini_fallback_model and config.gemini_fallback_model not in models:
-        models.append(config.gemini_fallback_model)
-
-    last_exc: Exception | None = None
-    for model in models:
         try:
-            data, raw = _generate_and_parse(client, file, prompt, model)
-            return GeminiOutput(
-                caption=_tidy_caption(data["caption"]),
-                file_name=data["file_name"],
-                folder=data["folder"],
-                raw=raw,
-            )
-        except Exception as exc:  # noqa: BLE001 — try the next model, if any
-            last_exc = exc
-            log.warning("[gemini] %s exhausted its retries: %s", model, exc)
+            # Imported here, not at module top: insights pulls in requests and
+            # the Graph helpers, which a caption run shouldn't hard-depend on —
+            # and a bug in the feedback loop must never block captioning.
+            from core import insights
 
-    assert last_exc is not None  # models is never empty
-    raise last_exc
+            top_hooks = insights.top_hooks()
+        except Exception:  # noqa: BLE001 — optional enrichment, never fatal
+            log.exception("[gemini] couldn't load top hooks; continuing without")
+            top_hooks = []
+        if top_hooks:
+            log.info("[gemini] using %d proven hook(s) as style reference", len(top_hooks))
+
+        prompt = _load_prompt(
+            date=date,
+            address=address,
+            coordinates=coordinates,
+            duration_s=duration_s,
+            resolution=resolution,
+            top_hooks=top_hooks,
+        )
+
+        # A "high demand" 503 tends to be specific to one model's capacity
+        # pool — often the newest release, which is where demand spikes
+        # concentrate — so a model that's still fully capable but not the one
+        # everyone's currently hammering is a free way to ride it out instead
+        # of just waiting. Only kicks in once GEMINI_MODEL has exhausted its
+        # own retries above; same file, no re-upload either way.
+        models = [config.gemini_model]
+        if config.gemini_fallback_model and config.gemini_fallback_model not in models:
+            models.append(config.gemini_fallback_model)
+
+        last_exc: Exception | None = None
+        for model in models:
+            try:
+                data, raw = _generate_and_parse(client, file, prompt, model)
+                return GeminiOutput(
+                    caption=_tidy_caption(data["caption"]),
+                    file_name=data["file_name"],
+                    folder=data["folder"],
+                    raw=raw,
+                )
+            except Exception as exc:  # noqa: BLE001 — try the next model, if any
+                last_exc = exc
+                log.warning("[gemini] %s exhausted its retries: %s", model, exc)
+
+        assert last_exc is not None  # models is never empty
+        raise last_exc
+    finally:
+        _delete_upload(client, file)

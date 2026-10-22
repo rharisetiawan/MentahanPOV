@@ -40,6 +40,7 @@ import requests
 
 from config import config
 from core import state as pipeline_state
+from core import threads_token
 from distributors.meta_graph import graph_url
 
 log = logging.getLogger(__name__)
@@ -62,7 +63,7 @@ class Unavailable(Exception):
 def _scrub(text: str) -> str:
     for secret in (
         config.fb_page_access_token,
-        config.threads_access_token,
+        threads_token.current(config),
         config.youtube_api_key,
     ):
         if secret:
@@ -226,7 +227,7 @@ def _instagram(post_id: str) -> dict[str, float]:
 
 
 def _threads(post_id: str) -> dict[str, float]:
-    token = config.threads_access_token
+    token = threads_token.current(config)
     if not token:
         raise Unavailable("THREADS_ACCESS_TOKEN kosong")
     got = _metric_values(
@@ -263,7 +264,7 @@ def _configured(platform: str) -> bool:
         "youtube": bool(config.youtube_api_key),
         "facebook": bool(config.fb_page_access_token),
         "instagram": bool(config.fb_page_access_token),
-        "threads": bool(config.threads_access_token),
+        "threads": bool(threads_token.current(config)),
     }.get(platform, False)
 
 

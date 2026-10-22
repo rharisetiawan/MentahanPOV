@@ -32,6 +32,8 @@ import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import config
+from core import threads_token
+from distributors.meta_graph import check, find_recent_media, publish_container
 
 log = logging.getLogger(__name__)
 PLATFORM = "threads"
@@ -55,7 +57,7 @@ def _wait_finished(creation_id: str, timeout: int = 600) -> None:
                 _graph(creation_id),
                 params={
                     "fields": "status,error_message",
-                    "access_token": config.threads_access_token,
+                    "access_token": threads_token.current(),
                 },
                 timeout=30,
             )
@@ -79,11 +81,31 @@ def _wait_finished(creation_id: str, timeout: int = 600) -> None:
     raise TimeoutError(f"Threads container {creation_id} not FINISHED after {timeout}s")
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=2, min=4, max=30))
+# Creating a container is safe to repeat (an unpublished one just expires);
+# publishing is not, so it is retried separately in publish_container().
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=4, max=30))
+def _create_container(post_url: str, text: str) -> str:
+    create = requests.post(
+        _graph(f"{config.threads_user_id}/threads"),
+        data={
+            "media_type": "VIDEO",
+            "video_url": post_url,
+            "text": text,
+            "access_token": threads_token.current(),
+        },
+        timeout=120,
+    )
+    check(create, "Threads container creation")
+    creation_id = create.json().get("id")
+    if not creation_id:
+        raise RuntimeError(f"Threads container creation returned no id: {create.json()}")
+    return creation_id
+
+
 def post(
     video_path: Path, caption: str, *, post_url: str | None = None, **_: Any
 ) -> dict[str, str]:
-    if not config.threads_user_id or not config.threads_access_token:
+    if not config.threads_user_id or not threads_token.current():
         raise RuntimeError(
             "THREADS_USER_ID / THREADS_ACCESS_TOKEN missing. See README → 'Threads'."
         )
@@ -100,49 +122,39 @@ def post(
         text = text[: TEXT_MAX_CHARS - 1].rstrip() + "…"
 
     log.info("[threads] creating container for %s", video_path.name)
-    create = requests.post(
-        _graph(f"{config.threads_user_id}/threads"),
-        data={
-            "media_type": "VIDEO",
-            "video_url": post_url,
-            "text": text,
-            "access_token": config.threads_access_token,
-        },
-        timeout=120,
-    )
-    create.raise_for_status()
-    creation_id = create.json().get("id")
-    if not creation_id:
-        raise RuntimeError(f"Threads container creation returned no id: {create.json()}")
-
+    creation_id = _create_container(post_url, text)
     _wait_finished(creation_id)
 
-    publish = requests.post(
-        _graph(f"{config.threads_user_id}/threads_publish"),
-        data={
-            "creation_id": creation_id,
-            "access_token": config.threads_access_token,
-        },
-        timeout=120,
+    token = threads_token.current()
+    media_id = publish_container(
+        publish_url=_graph(f"{config.threads_user_id}/threads_publish"),
+        status_url=_graph(creation_id),
+        status_field="status",
+        creation_id=creation_id,
+        token=token,
+        label="threads",
     )
-    publish.raise_for_status()
-    media_id = publish.json().get("id")
-    if not media_id:
-        raise RuntimeError(f"Threads publish returned no id: {publish.json()}")
+    if media_id is None:
+        found = find_recent_media(
+            _graph(f"{config.threads_user_id}/threads"), token, "text", text
+        )
+        if found is None:
+            # It IS live; only the id (for insights) is unknown.
+            return {"id": "", "url": "https://www.threads.net/"}
+        media_id, permalink = found
+        if permalink:
+            return {"id": media_id, "url": permalink}
 
     # Resolve permalink (best effort).
     perma_url: str | None = None
     try:
         meta = requests.get(
             _graph(media_id),
-            params={
-                "fields": "permalink",
-                "access_token": config.threads_access_token,
-            },
+            params={"fields": "permalink", "access_token": token},
             timeout=30,
         ).json()
         perma_url = meta.get("permalink")
-    except requests.RequestException:
+    except (requests.RequestException, ValueError):
         pass
 
     return {

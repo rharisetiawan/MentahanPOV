@@ -17,7 +17,6 @@ from typing import Any
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import config
 from core import google_auth
@@ -26,6 +25,8 @@ log = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 PLATFORM = "youtube"
+# Per chunk; the client backs off exponentially between tries.
+UPLOAD_RETRIES = 5
 
 
 def _get_creds() -> Credentials:
@@ -47,7 +48,10 @@ def _shortsify(title: str, description: str) -> tuple[str, str]:
     return title[:100], description[:5000]
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
+# No whole-function retry: re-running videos().insert() after the upload had
+# already completed (reply lost) would publish the Short twice. Transient
+# errors are retried inside the resumable session instead (num_retries
+# below), which resumes the same upload rather than starting a new video.
 def post(video_path: Path, caption: str, **_: Any) -> dict[str, str]:
     title_line, *body = caption.strip().splitlines()
     title = title_line.strip() or video_path.stem
@@ -78,7 +82,7 @@ def post(video_path: Path, caption: str, **_: Any) -> dict[str, str]:
 
     response = None
     while response is None:
-        status, response = request.next_chunk()
+        status, response = request.next_chunk(num_retries=UPLOAD_RETRIES)
         if status:
             log.info("[youtube] %.0f%%", status.progress() * 100)
 
