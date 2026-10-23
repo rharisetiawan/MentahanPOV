@@ -38,7 +38,12 @@ def _load_font(size: int):
             return ImageFont.truetype(path, size)
         except OSError:
             continue
-    return ImageFont.load_default()
+    # python:slim ships no fonts at all; Pillow >= 10.1 bundles a scalable
+    # one, which beats the tiny fixed-size bitmap fallback.
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
 
 
 def _generate_placeholder_logo(path: Path) -> None:
@@ -72,29 +77,84 @@ def _ensure_logo() -> Path:
     return logo_path
 
 
-def _posting_width(video_path: Path) -> int:
-    """Width the posting copy will have after the 1920 long-edge cap."""
+def _posting_size(video_path: Path) -> tuple[int, int]:
+    """(width, height) the posting copy will have after the 1920 long-edge cap."""
     from core.video_facts import probe_dimensions
 
     w, h = probe_dimensions(video_path)
     if not w or not h:
-        return 1080
-    if w > h:
-        return min(1920, w)
-    capped_h = min(1920, h)
-    return max(2, round(w * capped_h / h))
+        return 1080, 1920
+    scale = min(1.0, 1920 / max(w, h))
+    return max(2, round(w * scale)), max(2, round(h * scale))
 
 
-def make_posting_copy(video_path: Path, *, output_path: Path) -> Path:
+def _posting_width(video_path: Path) -> int:
+    """Width the posting copy will have after the 1920 long-edge cap."""
+    return _posting_size(video_path)[0]
+
+
+def render_location_label(text: str, *, video_size: tuple[int, int], path: Path) -> Path:
+    """Draw a "📍 place" pill as a transparent PNG sized for this video.
+
+    The pin is drawn as a shape, not an emoji: the box has no colour-emoji
+    font, and a missing glyph would render as an empty square.
+    """
+    from PIL import Image, ImageDraw
+
+    short_edge = min(video_size)
+    font_px = max(16, round(short_edge * 0.034))
+    font = _load_font(font_px)
+    probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    left, top, right, bottom = probe.textbbox((0, 0), text, font=font)
+    text_w, text_h = right - left, bottom - top
+
+    pad_x, pad_y = round(font_px * 0.7), round(font_px * 0.45)
+    pin_w = round(font_px * 0.75)
+    gap = round(font_px * 0.4)
+    height = text_h + 2 * pad_y
+    width = pad_x + pin_w + gap + text_w + pad_x
+
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle(
+        (0, 0, width - 1, height - 1), radius=height // 2, fill=(0, 0, 0, 150)
+    )
+    # Pin: a circle head over a downward point, with a hole in the head.
+    cx, r = pad_x + pin_w / 2, pin_w / 2
+    head_y = height / 2 - r * 0.45
+    draw.ellipse((cx - r, head_y - r, cx + r, head_y + r), fill=(255, 255, 255, 255))
+    draw.polygon(
+        [(cx - r * 0.82, head_y + r * 0.45), (cx + r * 0.82, head_y + r * 0.45),
+         (cx, head_y + r * 2.1)],
+        fill=(255, 255, 255, 255),
+    )
+    hole = r * 0.38
+    draw.ellipse((cx - hole, head_y - hole, cx + hole, head_y + hole), fill=(0, 0, 0, 150))
+    draw.text(
+        (pad_x + pin_w + gap - left, pad_y - top), text, font=font, fill=(255, 255, 255, 255)
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(path)
+    return path
+
+
+def make_posting_copy(
+    video_path: Path, *, output_path: Path, label: str | None = None
+) -> Path:
     """Render a watermarked, feed-sized copy of `video_path` at `output_path`.
 
     The master is never touched — it goes to Drive as-is, un-watermarked and
     un-recompressed — so this copy exists purely for the social platforms.
+
+    `label` (e.g. "Jl. Basuki Rahmat · Malang") fades in top-left for the
+    first LOCATION_LABEL_SECONDS: where a POV clip was shot is the first
+    thing a viewer wonders, and the platforms' own UI covers the bottom.
     """
     logo_path = _ensure_logo()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    wm_width = max(2, round(_posting_width(video_path) * config.watermark_width_pct))
+    size = _posting_size(video_path)
+    wm_width = max(2, round(size[0] * config.watermark_width_pct))
     scale_filter = (
         "scale='if(gt(iw,ih),min(1920,iw),-2)':'if(gt(iw,ih),-2,min(1920,ih))'"
     )
@@ -104,6 +164,19 @@ def make_posting_copy(video_path: Path, *, output_path: Path) -> Path:
         f"scale={wm_width}:-1[wm];"
         "[base][wm]overlay=(W-w)/2:(H-h)/2"
     )
+    label_inputs: list[str] = []
+    if label:
+        secs = max(1.5, float(config.location_label_seconds))
+        label_png = render_location_label(
+            label, video_size=size, path=output_path.with_suffix(".label.png")
+        )
+        label_inputs = ["-loop", "1", "-t", f"{secs:g}", "-i", str(label_png)]
+        filter_complex += (
+            "[marked];"
+            f"[2:v]format=rgba,fade=t=in:st=0:d=0.4:alpha=1,"
+            f"fade=t=out:st={secs - 0.6:g}:d=0.6:alpha=1[lbl];"
+            "[marked][lbl]overlay=x=round(W*0.05):y=round(H*0.08):eof_action=pass"
+        )
     cmd = [
         "ffmpeg",
         "-y",
@@ -111,6 +184,7 @@ def make_posting_copy(video_path: Path, *, output_path: Path) -> Path:
         str(video_path),
         "-i",
         str(logo_path),
+        *label_inputs,
         "-filter_complex",
         filter_complex,
         "-c:v",
@@ -135,7 +209,11 @@ def make_posting_copy(video_path: Path, *, output_path: Path) -> Path:
     ]
 
     log.info("[watermark] rendering posting copy -> %s", output_path)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    finally:
+        if label:
+            output_path.with_suffix(".label.png").unlink(missing_ok=True)
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg watermark render failed:\n{result.stderr[-4000:]}")
     return output_path

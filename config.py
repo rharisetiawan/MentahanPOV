@@ -106,6 +106,14 @@ class Config:
             _env("POSTING_COPY_DIR", "./state/posting_copies")
         )
     )
+    # "📍 Jl. Basuki Rahmat · Malang" fading in top-left at the start of the
+    # posting copy (only when the file has GPS). See core/watermark.py.
+    location_label: bool = field(
+        default_factory=lambda: _env("LOCATION_LABEL", "true").lower() != "false"
+    )
+    location_label_seconds: float = field(
+        default_factory=lambda: float(_env("LOCATION_LABEL_SECONDS", "4"))
+    )
 
     # YouTube
     youtube_client_secrets: Path = field(

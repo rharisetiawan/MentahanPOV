@@ -629,10 +629,22 @@ def _confirmation_text(entry: dict, selected: set[str]) -> str:
         f"📁 Folder: {gemini.get('folder', '?')}\n"
         f"📄 Nama file: {gemini.get('file_name', '?')}\n\n"
         f"📝 Caption:\n{entry.get('caption', '(kosong)')}\n\n"
+        f"{_variants_text(entry)}"
         f"📤 Platform: {platforms_line}\n"
         "(ketuk buat centang/uncentang)\n\n"
         "Lanjut posting?"
     )
+
+
+def _variants_text(entry: dict) -> str:
+    """The per-platform rewrites (main.caption_for), shown before posting."""
+    variants = entry.get("caption_variants") or {}
+    parts = []
+    if variants.get("youtube_title"):
+        parts.append(f"🎬 Judul YouTube: {variants['youtube_title']}\n\n")
+    if variants.get("threads_text"):
+        parts.append(f"🧵 Versi Threads:\n{variants['threads_text']}\n\n")
+    return "".join(parts)
 
 
 def _confirmation_keyboard(key: str, selected: set[str]) -> InlineKeyboardMarkup:
@@ -931,8 +943,16 @@ async def handle_text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return
 
-    pipeline_state.update(config.state_file, video_path, {"caption": update.message.text})
-    await update.message.reply_text("✅ Caption diupdate.")
+    # A hand-written caption replaces Gemini's per-platform rewrites too:
+    # they were derived from the old text and would contradict the edit.
+    pipeline_state.update(
+        config.state_file,
+        video_path,
+        {"caption": update.message.text, "caption_variants": {}},
+    )
+    await update.message.reply_text(
+        "✅ Caption diupdate (dipakai juga buat YouTube & Threads)."
+    )
     await _send_confirmation(update.message, video_path)
 
 

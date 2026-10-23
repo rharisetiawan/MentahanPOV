@@ -4,7 +4,8 @@ Ground-truth facts (date, address, coordinates, duration, resolution) are
 extracted locally (see core/video_facts.py + core/geocode.py) and fed into
 the prompt so Gemini only has to be creative about the vibe/title/caption
 and pick the right Drive folder — it never invents the facts themselves.
-Output is strict JSON: {"caption", "file_name", "folder"}.
+Output is strict JSON: {"caption", "file_name", "folder"} plus the optional
+per-platform "youtube_title" and "threads_text".
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from google import genai
@@ -33,6 +34,35 @@ class GeminiOutput:
     file_name: str
     folder: str
     raw: str
+    # Per-platform rewrites (main.caption_for): "youtube_title", "threads_text".
+    variants: dict[str, str] = field(default_factory=dict)
+
+
+# Hard limits the variants are trimmed to (YouTube caps titles at 100 and
+# _shortsify may add nothing to the title; Threads' API caps posts at 500).
+VARIANT_LIMITS = {"youtube_title": 95, "threads_text": 500}
+
+
+def _variants(data: dict) -> dict[str, str]:
+    """The optional per-platform texts, cleaned; anything odd is dropped.
+
+    Optional on purpose: a model that skips them must not fail the run —
+    each platform then just gets the full caption, as before.
+    """
+    out: dict[str, str] = {}
+    for key, limit in VARIANT_LIMITS.items():
+        value = data.get(key)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        value = value.strip()
+        if key == "youtube_title":
+            value = " ".join(value.split())  # a title is one line
+        else:
+            value = _tidy_caption(value)
+        if len(value) > limit:
+            value = value[: limit - 1].rstrip() + "…"
+        out[key] = value
+    return out
 
 
 def _load_prompt(
@@ -241,6 +271,7 @@ def generate_metadata(
                     file_name=data["file_name"],
                     folder=data["folder"],
                     raw=raw,
+                    variants=_variants(data),
                 )
             except Exception as exc:  # noqa: BLE001 — try the next model, if any
                 last_exc = exc

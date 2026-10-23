@@ -75,7 +75,7 @@ class PostingCopyFlagsTests(unittest.TestCase):
         done = SimpleNamespace(returncode=0, stderr="")
         with (
             mock.patch.object(watermark, "_ensure_logo", return_value=Path("logo.png")),
-            mock.patch.object(watermark, "_posting_width", return_value=1080),
+            mock.patch.object(watermark, "_posting_size", return_value=(1080, 1920)),
             mock.patch.object(watermark.subprocess, "run", return_value=done) as run,
             tempfile.TemporaryDirectory() as tmp,
         ):

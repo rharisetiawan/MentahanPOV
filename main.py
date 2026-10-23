@@ -154,6 +154,38 @@ def step_geocode(
     return address, coordinates
 
 
+def location_label(facts: video_facts.VideoFacts) -> str | None:
+    """Short on-video place name, or None (no GPS, switched off, lookup failed).
+
+    Shares step_geocode's Nominatim call (core/geocode.py caches it).
+    """
+    if not config.location_label or not facts.gps:
+        return None
+    try:
+        lat, lon = facts.gps
+        return geocode.reverse_geocode_details(lat, lon)[1]
+    except Exception:  # noqa: BLE001 — a label is cosmetic, never block a render
+        log.warning("[geocode] no location label for this clip", exc_info=True)
+        return None
+
+
+def caption_for(platform: str, caption: str, variants: dict[str, str] | None) -> str:
+    """The caption text one platform gets.
+
+    Gemini writes the full caption (Facebook/Instagram, and what ✏️ Edit
+    changes) plus two variants: a searchable YouTube title — youtube.py
+    takes the first line as the title and the rest as the description —
+    and a shorter, conversational Threads post. Missing variant → the full
+    caption, exactly as before.
+    """
+    variants = variants or {}
+    if platform == "youtube" and variants.get("youtube_title"):
+        return f"{variants['youtube_title']}\n{caption}"
+    if platform == "threads" and variants.get("threads_text"):
+        return variants["threads_text"]
+    return caption
+
+
 def step_gemini(
     video: Path,
     facts: video_facts.VideoFacts,
@@ -171,6 +203,7 @@ def step_gemini(
             file_name=cached["file_name"],
             folder=cached["folder"],
             raw="",
+            variants=entry.get("caption_variants") or {},
         )
     out = gemini.generate_metadata(
         video,
@@ -185,6 +218,7 @@ def step_gemini(
         video,
         {
             "caption": out.caption,
+            "caption_variants": out.variants,
             "gemini": {"file_name": out.file_name, "folder": out.folder},
         },
     )
@@ -210,14 +244,14 @@ def step_gdrive(
     return info["view_url"]
 
 
-def step_watermark(video: Path, *, skip: bool) -> Path:
+def step_watermark(video: Path, *, skip: bool, label: str | None = None) -> Path:
     entry = state.get(config.state_file, video)
     cached = entry.get("posting_copy_path")
     if skip and cached and Path(cached).exists():
         log.info("[watermark] reusing cached posting copy: %s", cached)
         return Path(cached)
     out_path = config.posting_copy_dir / f"{state.video_key(video)}_post.mp4"
-    watermark.make_posting_copy(video, output_path=out_path)
+    watermark.make_posting_copy(video, output_path=out_path, label=label)
     state.update(config.state_file, video, {"posting_copy_path": str(out_path)})
     return out_path
 
@@ -277,13 +311,17 @@ def step_distribute(
     extra_urls: dict[str, str],
     platforms: list[str],
     force: bool,
+    variants: dict[str, str] | None = None,
 ) -> None:
     def _post_one(name: str) -> None:
         try:
             log.info("[%s] posting…", name)
             upload = story_video if name in STORY_PLATFORMS else post_video
             result = PLATFORM_REGISTRY[name](
-                upload, caption, gdrive_url=gdrive_url, **extra_urls
+                upload,
+                caption_for(name, caption, variants),
+                gdrive_url=gdrive_url,
+                **extra_urls,
             )
             state.mark_platform(
                 config.state_file,
@@ -345,12 +383,15 @@ def main() -> int:
         log.info("Location: %s (%s)", address, coordinates)
     else:
         log.info("Location: none in file metadata (line omitted from caption)")
+    label = location_label(facts)
+    if label:
+        log.info("Location label: %s", label)
 
     with ThreadPoolExecutor(max_workers=1) as prerender_pool:
         # ffmpeg is the slowest CPU step on the HG680, Gemini + Drive are
         # network-bound: overlapping them means ✅ Post only has to publish.
         prerender = (
-            prerender_pool.submit(step_watermark, video, skip=False)
+            prerender_pool.submit(step_watermark, video, skip=False, label=label)
             if args.dry_run and args.prerender
             else None
         )
@@ -373,7 +414,7 @@ def main() -> int:
             log.info("--dry-run set; skipping distribution.")
             return 0
 
-    post_video = step_watermark(video, skip=args.skip_watermark)
+    post_video = step_watermark(video, skip=args.skip_watermark, label=label)
     log.info("Posting copy ready: %s", post_video)
 
     story_video = post_video
@@ -398,6 +439,7 @@ def main() -> int:
             extra_urls,
             platforms,
             args.force,
+            gemini_out.variants,
         )
     finally:
         # Runs even if distribution raised, so a crash can't leave the
