@@ -11,6 +11,9 @@ from unittest import mock
 import main as pipeline_main
 import telegram_bot as bot
 from core import gemini, geocode, watermark
+from core.video_facts import StreamInfo
+
+STREAM = StreamInfo(width=1080, height=1920, duration=20.0, fps=30.0, has_audio=True)
 
 
 class ShortLabelTests(unittest.TestCase):
@@ -79,7 +82,7 @@ class LabelRenderTests(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.object(watermark, "_ensure_logo", return_value=Path("logo.png")),
-            mock.patch.object(watermark, "_posting_size", return_value=(1080, 1920)),
+            mock.patch("core.video_facts.probe_stream_info", return_value=STREAM),
             mock.patch.object(watermark.subprocess, "run", return_value=done) as run,
         ):
             out = Path(tmp) / "o.mp4"
@@ -91,16 +94,113 @@ class LabelRenderTests(unittest.TestCase):
         self.assertIn("fade=t=out", graph)
         self.assertIn("eof_action=pass", graph)
 
-    def test_no_label_keeps_the_old_graph(self) -> None:
+    def test_silent_clip_without_label_gets_no_card(self) -> None:
+        # "Sound on" makes no sense without sound, and there's no place to show.
+        silent = StreamInfo(width=1080, height=1920, duration=20.0, fps=30.0, has_audio=False)
         done = SimpleNamespace(returncode=0, stderr="")
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.object(watermark, "_ensure_logo", return_value=Path("logo.png")),
-            mock.patch.object(watermark, "_posting_size", return_value=(1080, 1920)),
+            mock.patch("core.video_facts.probe_stream_info", return_value=silent),
             mock.patch.object(watermark.subprocess, "run", return_value=done) as run,
         ):
             watermark.make_posting_copy(Path("in.mp4"), output_path=Path(tmp) / "o.mp4")
-        self.assertNotIn("-loop", run.call_args.args[0])
+        cmd = run.call_args.args[0]
+        self.assertNotIn("-loop", cmd)
+        self.assertNotIn("[aout]", cmd)  # no audio to map
+
+
+class FirstTwoSecondsTests(unittest.TestCase):
+    """Hook trim, seamless loop, loudness — the swipe-or-stay package."""
+
+    def _cmd(self, stream: StreamInfo, **kwargs) -> list[str]:
+        done = SimpleNamespace(returncode=0, stderr="")
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(watermark, "_ensure_logo", return_value=Path("logo.png")),
+            mock.patch("core.video_facts.probe_stream_info", return_value=stream),
+            mock.patch.object(watermark.subprocess, "run", return_value=done) as run,
+        ):
+            watermark.make_posting_copy(
+                Path("in.mp4"), output_path=Path(tmp) / "o.mp4", **kwargs
+            )
+        return run.call_args.args[0]
+
+    def test_hook_start_is_only_used_early_in_the_clip(self) -> None:
+        self.assertEqual(watermark.hook_start(3.0, 20.0), 3.0)
+        self.assertEqual(watermark.hook_start(0.5, 20.0), 0.0)  # not worth it
+        self.assertEqual(watermark.hook_start(12.0, 20.0), 0.0)  # would cut too much
+        self.assertEqual(watermark.hook_start(None, 20.0), 0.0)
+        self.assertEqual(watermark.hook_start(1.2, 4.0), 0.0)  # clip too short
+
+    def test_hook_seeks_the_input(self) -> None:
+        cmd = self._cmd(STREAM, start_s=3.0)
+        self.assertEqual(cmd[cmd.index("-ss") + 1], "3")
+        self.assertLess(cmd.index("-ss"), cmd.index("-i"))
+        self.assertNotIn("-ss", self._cmd(STREAM))
+
+    def test_loop_and_loudnorm_in_the_graph(self) -> None:
+        cmd = self._cmd(STREAM)
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        self.assertIn("xfade=transition=fade", graph)
+        self.assertIn("acrossfade", graph)
+        self.assertIn("loudnorm=I=-14", graph)
+        self.assertEqual(cmd[cmd.index("-ar") + 1], "48000")
+
+    def test_very_short_clip_is_not_looped(self) -> None:
+        short = StreamInfo(width=1080, height=1920, duration=4.0, fps=30.0, has_audio=True)
+        graph = self._cmd(short)[self._cmd(short).index("-filter_complex") + 1]
+        self.assertNotIn("xfade", graph)
+
+    def test_card_has_place_and_sound_hint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            watermark, "render_overlay_card", wraps=watermark.render_overlay_card
+        ) as card:
+            done = SimpleNamespace(returncode=0, stderr="")
+            with (
+                mock.patch.object(watermark, "_ensure_logo", return_value=Path("logo.png")),
+                mock.patch("core.video_facts.probe_stream_info", return_value=STREAM),
+                mock.patch.object(watermark.subprocess, "run", return_value=done),
+            ):
+                watermark.make_posting_copy(
+                    Path("in.mp4"), output_path=Path(tmp) / "o.mp4", label="Malang"
+                )
+        rows = card.call_args.args[0]
+        self.assertEqual([icon for icon, _ in rows], ["pin", "speaker"])
+
+
+class RotationTests(unittest.TestCase):
+    def test_portrait_phone_clip_tagged_as_rotated_landscape(self) -> None:
+        from core import video_facts
+
+        probe = {
+            "format": {"duration": "12.5"},
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "width": 1920,
+                    "height": 1080,
+                    "r_frame_rate": "30000/1001",
+                    "side_data_list": [{"rotation": -90}],
+                },
+                {"codec_type": "audio"},
+            ],
+        }
+        with mock.patch.object(video_facts, "_ffprobe_json", return_value=probe):
+            info = video_facts.probe_stream_info(Path("v.mp4"))
+        self.assertEqual((info.width, info.height), (1080, 1920))
+        self.assertAlmostEqual(info.fps, 29.97, places=2)
+        self.assertEqual(info.duration, 12.5)
+        self.assertTrue(info.has_audio)
+
+
+class HookStartParseTests(unittest.TestCase):
+    def test_only_sane_numbers(self) -> None:
+        self.assertEqual(gemini._hook_start({"hook_start_s": 4}), 4.0)
+        self.assertIsNone(gemini._hook_start({"hook_start_s": -1}))
+        self.assertIsNone(gemini._hook_start({"hook_start_s": "4"}))
+        self.assertIsNone(gemini._hook_start({"hook_start_s": True}))
+        self.assertIsNone(gemini._hook_start({}))
 
 
 class CaptionVariantTests(unittest.TestCase):

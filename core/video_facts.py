@@ -72,13 +72,68 @@ def _parse_gps(tags: dict) -> tuple[float, float] | None:
     return float(m.group(1)), float(m.group(2))
 
 
-def probe_dimensions(video_path: Path) -> tuple[int, int]:
-    """(width, height) of the first video stream, or (0, 0) if unreadable."""
+@dataclass
+class StreamInfo:
+    width: int  # as displayed, i.e. after the rotation tag is applied
+    height: int
+    duration: float  # seconds, 0.0 if unknown
+    fps: float  # 0.0 if unknown
+    has_audio: bool
+
+
+def _rotation(stream: dict) -> int:
+    """Degrees the player rotates this stream by (phones tag portrait clips)."""
+    for side in stream.get("side_data_list") or []:
+        if "rotation" in side:
+            try:
+                return int(float(side["rotation"]))
+            except (TypeError, ValueError):
+                pass
+    try:
+        return int(float((stream.get("tags") or {}).get("rotate", 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _fps(stream: dict) -> float:
+    for key in ("r_frame_rate", "avg_frame_rate"):
+        num, _, den = str(stream.get(key) or "").partition("/")
+        try:
+            value = float(num) / float(den or 1)
+        except (ValueError, ZeroDivisionError):
+            continue
+        if 0 < value <= 240:
+            return value
+    return 0.0
+
+
+def probe_stream_info(video_path: Path) -> StreamInfo:
+    """Display size, exact duration, frame rate and whether there's sound."""
     info = _ffprobe_json(video_path)
-    stream = next(
-        (s for s in info.get("streams", []) if s.get("codec_type") == "video"), {}
+    streams = info.get("streams", [])
+    video = next((s for s in streams if s.get("codec_type") == "video"), {})
+    w, h = int(video.get("width", 0)), int(video.get("height", 0))
+    # ffmpeg auto-rotates while decoding, so a 1920x1080 stream tagged -90
+    # comes out 1080x1920: sizes computed from the raw numbers would be wrong.
+    if abs(_rotation(video)) % 180 == 90:
+        w, h = h, w
+    try:
+        duration = float((info.get("format") or {}).get("duration") or 0)
+    except ValueError:
+        duration = 0.0
+    return StreamInfo(
+        width=w,
+        height=h,
+        duration=duration,
+        fps=_fps(video),
+        has_audio=any(s.get("codec_type") == "audio" for s in streams),
     )
-    return int(stream.get("width", 0)), int(stream.get("height", 0))
+
+
+def probe_dimensions(video_path: Path) -> tuple[int, int]:
+    """(width, height) of the first video stream as displayed, or (0, 0)."""
+    info = probe_stream_info(video_path)
+    return info.width, info.height
 
 
 def extract_facts(video_path: Path) -> VideoFacts:

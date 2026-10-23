@@ -49,6 +49,10 @@ TASK
    short sentence, then a casual question that invites replies (e.g.
    "What's the first sound you notice?"), then a line "🔍 <file_name>",
    then "#MentahanPOV". No "link in my bio" line on Threads.
+10. Find the second (a number, counted from the very start of the video)
+   where the most scroll-stopping moment begins. Viewers decide within two
+   seconds whether to swipe, so the short-form copy may start there. If the
+   opening is already strong, or nothing stands out, use 0.
 
 Assemble the caption text EXACTLY in this shape (keep the emoji, line
 breaks, and labels literally, substituting the placeholders). If the
@@ -69,4 +73,4 @@ never write a placeholder like "not available":
 OUTPUT
 Return ONLY strict JSON — no markdown fences, no commentary before or
 after — with exactly these keys:
-{"caption": "<the full caption text above>", "file_name": "<file_name>", "folder": "<chosen folder name, verbatim from the list>", "youtube_title": "<step 8>", "threads_text": "<step 9>"}
+{"caption": "<the full caption text above>", "file_name": "<file_name>", "folder": "<chosen folder name, verbatim from the list>", "youtube_title": "<step 8>", "threads_text": "<step 9>", "hook_start_s": <step 10, a number>}

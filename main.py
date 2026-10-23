@@ -204,6 +204,7 @@ def step_gemini(
             folder=cached["folder"],
             raw="",
             variants=entry.get("caption_variants") or {},
+            hook_start_s=cached.get("hook_start_s"),
         )
     out = gemini.generate_metadata(
         video,
@@ -219,7 +220,11 @@ def step_gemini(
         {
             "caption": out.caption,
             "caption_variants": out.variants,
-            "gemini": {"file_name": out.file_name, "folder": out.folder},
+            "gemini": {
+                "file_name": out.file_name,
+                "folder": out.folder,
+                "hook_start_s": out.hook_start_s,
+            },
         },
     )
     return out
@@ -244,14 +249,22 @@ def step_gdrive(
     return info["view_url"]
 
 
-def step_watermark(video: Path, *, skip: bool, label: str | None = None) -> Path:
+def step_watermark(
+    video: Path,
+    *,
+    skip: bool,
+    label: str | None = None,
+    start_s: float | None = None,
+) -> Path:
     entry = state.get(config.state_file, video)
     cached = entry.get("posting_copy_path")
     if skip and cached and Path(cached).exists():
         log.info("[watermark] reusing cached posting copy: %s", cached)
         return Path(cached)
     out_path = config.posting_copy_dir / f"{state.video_key(video)}_post.mp4"
-    watermark.make_posting_copy(video, output_path=out_path, label=label)
+    watermark.make_posting_copy(
+        video, output_path=out_path, label=label, start_s=start_s
+    )
     state.update(config.state_file, video, {"posting_copy_path": str(out_path)})
     return out_path
 
@@ -388,16 +401,23 @@ def main() -> int:
         log.info("Location label: %s", label)
 
     with ThreadPoolExecutor(max_workers=1) as prerender_pool:
-        # ffmpeg is the slowest CPU step on the HG680, Gemini + Drive are
-        # network-bound: overlapping them means ✅ Post only has to publish.
-        prerender = (
-            prerender_pool.submit(step_watermark, video, skip=False, label=label)
-            if args.dry_run and args.prerender
-            else None
-        )
-
         gemini_out = step_gemini(
             video, facts, address, coordinates, skip=args.skip_gemini
+        )
+        # ffmpeg is the slowest CPU step on the HG680, the Drive upload is
+        # network-bound: overlapping them means ✅ Post only has to publish.
+        # Started after Gemini, not before, because the render needs its
+        # hook moment (where the posting copy starts).
+        prerender = (
+            prerender_pool.submit(
+                step_watermark,
+                video,
+                skip=False,
+                label=label,
+                start_s=gemini_out.hook_start_s,
+            )
+            if args.dry_run and args.prerender
+            else None
         )
         log.info("Folder: %s | file_name: %s", gemini_out.folder, gemini_out.file_name)
         log.info("Caption (%d chars):\n%s", len(gemini_out.caption), gemini_out.caption)
@@ -414,7 +434,12 @@ def main() -> int:
             log.info("--dry-run set; skipping distribution.")
             return 0
 
-    post_video = step_watermark(video, skip=args.skip_watermark, label=label)
+    post_video = step_watermark(
+        video,
+        skip=args.skip_watermark,
+        label=label,
+        start_s=gemini_out.hook_start_s,
+    )
     log.info("Posting copy ready: %s", post_video)
 
     story_video = post_video

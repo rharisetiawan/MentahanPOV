@@ -12,6 +12,9 @@ from unittest import mock
 import main as pipeline_main
 import telegram_bot as bot
 from core import watermark
+from core.video_facts import StreamInfo
+
+STREAM = StreamInfo(width=1080, height=1920, duration=20.0, fps=30.0, has_audio=True)
 
 
 class KillRunTests(unittest.TestCase):
@@ -39,7 +42,9 @@ class KillRunTests(unittest.TestCase):
 
 class PrerenderTests(unittest.TestCase):
     def _run(self, *flags: str, render_error: Exception | None = None) -> mock.Mock:
-        gem = SimpleNamespace(caption="c", file_name="f", folder="d")
+        gem = SimpleNamespace(
+            caption="c", file_name="f", folder="d", hook_start_s=None
+        )
         with tempfile.TemporaryDirectory() as tmp:
             video = Path(tmp) / "v.mp4"
             video.write_bytes(b"x")
@@ -75,7 +80,7 @@ class PostingCopyFlagsTests(unittest.TestCase):
         done = SimpleNamespace(returncode=0, stderr="")
         with (
             mock.patch.object(watermark, "_ensure_logo", return_value=Path("logo.png")),
-            mock.patch.object(watermark, "_posting_size", return_value=(1080, 1920)),
+            mock.patch("core.video_facts.probe_stream_info", return_value=STREAM),
             mock.patch.object(watermark.subprocess, "run", return_value=done) as run,
             tempfile.TemporaryDirectory() as tmp,
         ):

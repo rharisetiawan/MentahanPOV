@@ -36,6 +36,16 @@ class GeminiOutput:
     raw: str
     # Per-platform rewrites (main.caption_for): "youtube_title", "threads_text".
     variants: dict[str, str] = field(default_factory=dict)
+    # Second the most striking moment starts (the posting copy may start
+    # there — core/watermark.hook_start). None if Gemini gave nothing usable.
+    hook_start_s: float | None = None
+
+
+def _hook_start(data: dict) -> float | None:
+    value = data.get("hook_start_s")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if value >= 0 else None
 
 
 # Hard limits the variants are trimmed to (YouTube caps titles at 100 and
@@ -272,6 +282,7 @@ def generate_metadata(
                     folder=data["folder"],
                     raw=raw,
                     variants=_variants(data),
+                    hook_start_s=_hook_start(data),
                 )
             except Exception as exc:  # noqa: BLE001 — try the next model, if any
                 last_exc = exc

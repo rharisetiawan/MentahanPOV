@@ -114,6 +114,25 @@ class Config:
     location_label_seconds: float = field(
         default_factory=lambda: float(_env("LOCATION_LABEL_SECONDS", "4"))
     )
+    # The first-two-seconds package (core/watermark.py): start at Gemini's
+    # hook moment, a "Sound on" hint in the same card as the place, a
+    # seamless loop, and loudness normalised to -14 LUFS.
+    hook_trim: bool = field(
+        default_factory=lambda: _env("HOOK_TRIM", "true").lower() != "false"
+    )
+    sound_on_hint: bool = field(
+        default_factory=lambda: _env("SOUND_ON_HINT", "true").lower() != "false"
+    )
+    sound_on_text: str = field(default_factory=lambda: _env("SOUND_ON_TEXT", "Sound on"))
+    seamless_loop: bool = field(
+        default_factory=lambda: _env("SEAMLESS_LOOP", "true").lower() != "false"
+    )
+    loop_crossfade_s: float = field(
+        default_factory=lambda: float(_env("LOOP_CROSSFADE_S", "0.8"))
+    )
+    loudnorm: bool = field(
+        default_factory=lambda: _env("LOUDNORM", "true").lower() != "false"
+    )
 
     # YouTube
     youtube_client_secrets: Path = field(
