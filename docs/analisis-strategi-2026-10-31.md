@@ -28,7 +28,7 @@ Median 1.100, sama di paruh video lama dan baru → plafon "kuota uji" Shorts, t
 ### Data dari dalam akun (login di Chrome, 31 Okt 2026)
 | Platform | Konten | Views | Tren |
 |---|---|---|---|
-| YouTube Shorts | 97 | ±98K total, median 1.100 | Datar (Studio tidak bisa dibuka: channel ada di akun Google lain yang tidak login) |
+| YouTube Shorts | 97 | ±98K total, median 1.100 | Datar. Studio 28 hari: 9,8K views, **63,7% swipe away**, 96,6% dari feed Shorts, 2,9% dari search, **98,3% penonton dari Indonesia** |
 | TikTok | 96 | ±68K total, median 409, tertinggi 7.016 | **Turun**: 20 video tertua 115–4.489 (banyak 1–2K), 20 terbaru 4–788 |
 | Instagram Reels | 75 | median 30 terbaru ±20 | **Anjlok**: 15 Reel tertua 120–571 (rata-rata ±390), 30 terbaru kebanyakan 1–200 (satu 1.745) |
 | Facebook Reels | 29 | **0–5 per video** | Praktis tidak didistribusikan sama sekali |

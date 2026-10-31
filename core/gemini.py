@@ -100,8 +100,7 @@ def _load_prompt(
             "PROVEN HOOKS — opening lines that performed best on this account so\n"
             "far. Use them ONLY as a reference for rhythm and tone. Never reuse\n"
             "their wording and never carry over any detail from them (place,\n"
-            "sound, object): your hook must be about THIS video. Some may be in\n"
-            "English from before the switch — yours is still in Indonesian.\n"
+            "sound, object): your hook must be about THIS video.\n"
             + "\n".join(f"- {h}" for h in top_hooks)
             + "\n\n"
         )
