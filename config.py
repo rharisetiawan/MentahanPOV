@@ -227,8 +227,9 @@ class Config:
                     # access token — listing it before that setup is done
                     # makes every run report a failure. Add "threads" here (or
                     # to TELEGRAM_PLATFORMS) once THREADS_USER_ID/ACCESS_TOKEN
-                    # are set.
-                    "youtube,facebook,instagram,facebook_story,instagram_story",
+                    # are set. Stories are opt-in as well: they only reach
+                    # existing followers (see .env.example).
+                    "youtube,facebook,instagram",
                 ).split(",")
                 if p.strip()
             )

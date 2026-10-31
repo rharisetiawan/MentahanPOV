@@ -585,7 +585,7 @@ async def _warn_if_metadata_stripped(
         return
 
     hint = (
-        "⚠️ Video ini gak ada data GPS-nya, jadi baris '📍 Location' "
+        "⚠️ Video ini gak ada data GPS-nya, jadi baris '📍 Lokasi' "
         "bakal dilewati di caption.\n\n"
     )
     if not sent_as_document:

@@ -213,8 +213,10 @@ GRAPH_API_VERSION=v19.0
 
 #### Stories (Facebook + Instagram)
 
-Both are enabled by default via `PLATFORMS` and need no extra permissions
-beyond the scopes above:
+Both are off by default — a Story only reaches existing followers, so on a
+small account it costs render/upload time for almost no reach. They need no
+extra permissions beyond the scopes above; to turn them on, add them to
+`PLATFORMS`:
 
 ```env
 PLATFORMS=youtube,facebook,instagram,facebook_story,instagram_story
@@ -314,7 +316,7 @@ Threads isn't in the default `PLATFORMS` list yet — add it once the token
 above is set:
 
 ```env
-PLATFORMS=youtube,facebook,instagram,facebook_story,instagram_story,threads
+PLATFORMS=youtube,facebook,instagram,threads
 ```
 
 > **How Threads gets the video.** Same URL-fetch model as Instagram (see

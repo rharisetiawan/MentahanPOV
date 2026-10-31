@@ -100,7 +100,8 @@ def _load_prompt(
             "PROVEN HOOKS — opening lines that performed best on this account so\n"
             "far. Use them ONLY as a reference for rhythm and tone. Never reuse\n"
             "their wording and never carry over any detail from them (place,\n"
-            "sound, object): your hook must be about THIS video.\n"
+            "sound, object): your hook must be about THIS video. Some may be in\n"
+            "English from before the switch — yours is still in Indonesian.\n"
             + "\n".join(f"- {h}" for h in top_hooks)
             + "\n\n"
         )
@@ -119,7 +120,7 @@ def _load_prompt(
     # often as not.
     if address and coordinates:
         address_fact = f"- Address: {address}"
-        location_line = f"📍 Location: {address} ({coordinates})"
+        location_line = f"📍 Lokasi: {address} ({coordinates})"
         filename_pattern = f"{date}_<LOCATION>_<VIBE>_{duration_s}s_{resolution}.mp4"
     else:
         address_fact = "- Address: (none — this file carries no GPS)"

@@ -123,6 +123,13 @@ class PromptTests(unittest.TestCase):
         self.assertLess(prompt.index("PROVEN HOOKS"), prompt.index("TASK"))
         self.assertNotIn("{{", prompt)  # every placeholder was filled
 
+    def test_prompt_targets_indonesian_creators(self) -> None:
+        prompt = gemini._load_prompt(**self.ARGS)
+        self.assertIn("📍 Lokasi: Jl. Contoh, Malang (-7.9, 112.6)", prompt)
+        self.assertIn("#MentahanPOV #mentahanvideo", prompt)
+        self.assertIn('MUST start with\n   "Mentahan video"', prompt)
+        self.assertNotIn("Click the link in my bio", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
