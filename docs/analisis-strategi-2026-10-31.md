@@ -25,6 +25,20 @@ Median 1.100, sama di paruh video lama dan baru → plafon "kuota uji" Shorts, t
 - Terkuat: Icon Bali pagi (3K), motor lewat rumah warna-warni (2,7K), anak melambai ke kereta (2,5K), kolam koi (2,2K), Gereja Kayutangan malam (2,1K), hujan sore ASMR (2,1K).
 - Terlemah: halaman kampus sepi, kafe pagi, jalan pinggiran biasa, timelapse panjang (6–270).
 
+### Data dari dalam akun (login di Chrome, 31 Okt 2026)
+| Platform | Konten | Views | Tren |
+|---|---|---|---|
+| YouTube Shorts | 97 | ±98K total, median 1.100 | Datar (Studio tidak bisa dibuka: channel ada di akun Google lain yang tidak login) |
+| TikTok | 96 | ±68K total, median 409, tertinggi 7.016 | **Turun**: 20 video tertua 115–4.489 (banyak 1–2K), 20 terbaru 4–788 |
+| Instagram Reels | 75 | median 30 terbaru ±20 | **Anjlok**: 15 Reel tertua 120–571 (rata-rata ±390), 30 terbaru kebanyakan 1–200 (satu 1.745) |
+| Facebook Reels | 29 | **0–5 per video** | Praktis tidak didistribusikan sama sekali |
+
+**Yang menang di semua platform: landmark/tempat yang dikenal orang.** TikTok teratas: gedung terbengkalai Surabaya (7K), salat Jumat di masjid (4,5K), patung singa malam (3,1K), Gereja Kayutangan malam (2,4K), jalan depan UB (2,2K), papan Kayutangan habis hujan (2K). YouTube teratas juga Icon Bali, Gereja Kayutangan, koi, kereta. Klip "suasana biasa tanpa nama tempat" yang paling lemah.
+
+**Tren turun di TikTok dan IG** setelah fase awal: algoritma memberi kesempatan ke akun baru, lalu memotong distribusi karena video tidak membuat orang follow/komentar/share. Volume tinggi dengan format seragam mempercepat penurunan ini.
+
+**Facebook 0–5 views:** pipeline mengunggah lewat endpoint `/{page}/videos` (video biasa), bukan Reels API (`/{page}/video_reels`). Ditambah Page baru dengan 2 follower → hampir tidak ada distribusi. Uji ganti ke Reels API sebelum menyimpulkan FB tidak berguna.
+
 ## 2. Temuan kritis (bocor di corong)
 
 1. **Folder Drive di bio Instagram minta login Google.** Dibuka tanpa akun → diarahkan ke halaman *Sign in*. Kode (`core/gdrive.py`) hanya membuat **file** publik, bukan folder induknya. Kalau ini benar, janji "100% gratis, download di sini" **tidak bisa dipakai** pengunjung — satu-satunya CTA brand ini putus. *(Mohon cek ulang dari jendela incognito.)*
@@ -104,6 +118,8 @@ Orang **menonton** (YouTube ±1K/video) tapi **tidak ada yang mau mengikuti** (�
 5. **Kit TikTok manual**: bot mengirim balik posting copy + caption TikTok siap copy-paste.
 6. **Rekap mingguan di Telegram**: follower per platform, median views 72 jam, video terbaik/terburuk, tema yang menang.
 7. **Gabungan long-form mingguan** otomatis dari master seri yang sama.
+8. **Facebook lewat Reels API** (`/{page}/video_reels`, upload 3 fase seperti Story) menggantikan `/{page}/videos` — ukur 2 minggu.
+9. **Prioritaskan landmark**: Gemini menandai klip yang punya tempat/landmark dikenal; itu yang diposting dulu, klip "suasana biasa" cukup arsip.
 
 ### Tahap 5 — Cara merekam (sumber kualitas)
 - Mulai rekam **saat sudah ada gerakan** (kereta datang, hujan deras, lampu menyala), bukan sebelum.
