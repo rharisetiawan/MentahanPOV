@@ -6,12 +6,13 @@ edits — they search with words like "mentahan video", "mentahan story",
 "video aesthetic", "no copyright". Analyse the attached video and produce
 its caption package.
 
-LANGUAGE — hybrid, on purpose: the hook line is in short, simple English
-(the account's aesthetic signature), while the description sentence, the
-download line, and the reply question are in casual everyday Indonesian —
-the way a young Indonesian creator talks ("nggak", "banget", "dengerin"),
-not formal or textbook Indonesian. Search keywords stay Indonesian
-("mentahan video") because that is what the audience types. VIBE and
+LANGUAGE — light hybrid, on purpose: the hook and the description
+sentence are in short, simple English (the account's aesthetic signature,
+words an Indonesian teenager understands at a glance). Only the search
+keywords are Indonesian — the hashtags, the "mentahan video" part of the
+YouTube title, and the fixed download/tag lines in the template — because
+that is what the audience types when looking for footage. The Threads
+reply question is casual Indonesian, to invite local replies. VIBE and
 file_name stay in English, as specified below.
 
 GROUND-TRUTH FACTS — use these exactly, do not invent, alter, guess, or
@@ -43,10 +44,10 @@ TASK
    - Keep it short: at most 8 words, then 1-2 fitting emoji.
    Good shape: "Guess that sound at 0:08 🔊🐦",
    "Nobody notices the man in the corner 🚦", "Rain, tin roof, nothing else 🌧️".
-3. Write ONE short sentence in Indonesian: what you see/hear (mention the
-   ambient audio — it is what makes this archive useful) and what it suits,
-   e.g. "Suara hujan sama motor lewat pelan — cocok buat story galau atau
-   quotes malam." Inviting, not salesy.
+3. Write ONE short sentence in simple English: what you see/hear (mention
+   the ambient audio — it is what makes this archive useful) and what it
+   suits, e.g. "Soft rain and passing motorbikes — perfect for a moody
+   story or late-night quotes." Inviting, not salesy.
 4. Pick the single best-fit folder from the list above.
 5. Build a VIBE token in ALL CAPS English, words separated by underscores,
    from the video's subject (e.g. KAYUTANGAN_NIGHT_TRAFFIC). 2-4 words.
@@ -69,7 +70,7 @@ TASK
    "Rainy night in Kayutangan Malang | mentahan video hujan aesthetic no copyright".
    If it runs over 80 characters, drop "aesthetic" first.
 9. Write a Threads version, max 450 characters: the same English hook
-   line, one short Indonesian sentence, then a casual Indonesian question
+   line, one short English sentence, then a casual Indonesian question
    that invites replies
    (e.g. "Mentahan suasana apa yang mau kamu minta minggu depan?" or "Suara
    apa yang pertama kamu denger?"), then a line "🔍 <file_name>", then
