@@ -127,6 +127,7 @@ class PromptTests(unittest.TestCase):
         prompt = gemini._load_prompt(**self.ARGS)
         self.assertIn("📍 Lokasi: Jl. Contoh, Malang (-7.9, 112.6)", prompt)
         self.assertIn("#MentahanPOV #mentahanvideo", prompt)
+        self.assertIn("Tag @mentahanpov biar aku repost", prompt)
         self.assertIn('then " | mentahan\n   video "', prompt)
         self.assertNotIn("Click the link in my bio", prompt)
 
