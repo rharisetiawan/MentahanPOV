@@ -217,12 +217,14 @@ def _build_graph(
         # first `xf` seconds, so the last frame flows straight into the
         # first one. Shorts counts every replay as a view, and an ambient
         # clip with no visible seam gets replayed without anyone noticing.
-        # (Constant frame rate first: xfade refuses variable-rate input.)
-        rate = f"fps={fps:g}," if fps else "fps=30,"
+        # (Constant frame rate first: xfade refuses variable-rate input. The
+        # head needs it again after setpts — ffmpeg 7.x marks a setpts output
+        # as rate 1/0, and xfade then rejects the pair outright.)
+        rate = f"fps={fps:g}" if fps else "fps=30"
         offset = max(0.1, length - xf - 0.05)
         parts += [
-            f"[0:v]{scale},{rate}setsar=1,split=2[va][vb]",
-            f"[vb]trim=0:{xf:g},setpts=PTS-STARTPTS[vh]",
+            f"[0:v]{scale},{rate},setsar=1,split=2[va][vb]",
+            f"[vb]trim=0:{xf:g},setpts=PTS-STARTPTS,{rate}[vh]",
             f"[va][vh]xfade=transition=fade:duration={xf:g}:offset={offset:g}[vx]",
             f"[vx]trim=start={xf:g},setpts=PTS-STARTPTS[base]",
         ]
@@ -246,11 +248,18 @@ def _build_graph(
 
     if has_audio:
         if loop:
+            # Same seam as the video: the body (opening `xf` dropped) fades
+            # out over its last `xf` seconds while the opening fades in on
+            # top of it. Built from afade+amix rather than acrossfade, which
+            # on ffmpeg 7.x emits only a few ms when fed from asplit.
+            tail = max(0.0, length - 2 * xf)
             parts += [
                 "[0:a]asplit=2[aa][ab]",
-                f"[ab]atrim=0:{xf:g},asetpts=PTS-STARTPTS[ah]",
-                f"[aa][ah]acrossfade=d={xf:g}[ax]",
-                f"[ax]atrim=start={xf:g},asetpts=PTS-STARTPTS[a1]",
+                f"[aa]atrim=start={xf:g},asetpts=PTS-STARTPTS,"
+                f"afade=t=out:st={tail:g}:d={xf:g}[abody]",
+                f"[ab]atrim=0:{xf:g},asetpts=PTS-STARTPTS,"
+                f"afade=t=in:st=0:d={xf:g},adelay={round(tail * 1000)}:all=1[ahead]",
+                "[abody][ahead]amix=inputs=2:duration=first:normalize=0[a1]",
             ]
         else:
             parts.append("[0:a]anull[a1]")

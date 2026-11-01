@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,6 +17,15 @@ from core import gemini, geocode, watermark
 from core.video_facts import StreamInfo
 
 STREAM = StreamInfo(width=1080, height=1920, duration=20.0, fps=30.0, has_audio=True)
+
+
+def _logo(tmp: str) -> Path:
+    """A small real PNG logo, for tests that run ffmpeg for real."""
+    from PIL import Image
+
+    path = Path(tmp) / "logo.png"
+    Image.new("RGBA", (200, 100), (255, 255, 255, 200)).save(path)
+    return path
 
 
 class ShortLabelTests(unittest.TestCase):
@@ -143,9 +155,38 @@ class FirstTwoSecondsTests(unittest.TestCase):
         cmd = self._cmd(STREAM)
         graph = cmd[cmd.index("-filter_complex") + 1]
         self.assertIn("xfade=transition=fade", graph)
-        self.assertIn("acrossfade", graph)
+        self.assertIn("setpts=PTS-STARTPTS,fps=30[vh]", graph)  # rate restored for xfade
+        self.assertIn("amix=inputs=2", graph)
+        self.assertNotIn("acrossfade", graph)  # emits ~nothing on ffmpeg 7.x
         self.assertIn("loudnorm=I=-14", graph)
         self.assertEqual(cmd[cmd.index("-ar") + 1], "48000")
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "needs ffmpeg")
+    def test_real_render_of_a_looped_clip_with_audio(self) -> None:
+        # The mocked tests above can't catch a graph ffmpeg itself rejects —
+        # exactly how the first loop version shipped broken on ffmpeg 7.1.
+        with tempfile.TemporaryDirectory() as tmp:
+            src, out = Path(tmp) / "in.mp4", Path(tmp) / "out.mp4"
+            subprocess.run(
+                ["ffmpeg", "-v", "error", "-y",
+                 "-f", "lavfi", "-i", "testsrc=size=360x640:rate=50:duration=8",
+                 "-f", "lavfi", "-i", "sine=d=8", "-shortest",
+                 "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src)],
+                check=True,
+            )
+            with mock.patch.object(watermark, "_ensure_logo", return_value=_logo(tmp)):
+                watermark.make_posting_copy(src, output_path=out, start_s=1.5)
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+                 "-show_entries", "format=duration", "-of", "json", str(out)],
+                capture_output=True, text=True, check=True,
+            )
+            info = json.loads(probe.stdout)
+            self.assertEqual(
+                sorted(s["codec_type"] for s in info["streams"]), ["audio", "video"]
+            )
+            # 8s - 1.5s hook - 0.8s seam ≈ 5.7s; a broken audio chain gives ~0.
+            self.assertGreater(float(info["format"]["duration"]), 5.0)
 
     def test_very_short_clip_is_not_looped(self) -> None:
         short = StreamInfo(width=1080, height=1920, duration=4.0, fps=30.0, has_audio=True)
