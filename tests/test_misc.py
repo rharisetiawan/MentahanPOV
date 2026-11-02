@@ -128,6 +128,7 @@ class PromptTests(unittest.TestCase):
         self.assertIn("📍 Lokasi: Jl. Contoh, Malang (-7.9, 112.6)", prompt)
         self.assertIn("#MentahanPOV #mentahanvideo", prompt)
         self.assertIn("Tag @mentahanpov biar aku repost", prompt)
+        self.assertIn("ambil di s.id/mentahanpov", prompt)  # typeable where links aren't clickable
         self.assertIn('then " | mentahan\n   video "', prompt)
         self.assertNotIn("Click the link in my bio", prompt)
 
