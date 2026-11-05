@@ -5,7 +5,8 @@ extracted locally (see core/video_facts.py + core/geocode.py) and fed into
 the prompt so Gemini only has to be creative about the vibe/title/caption
 and pick the right Drive folder — it never invents the facts themselves.
 Output is strict JSON: {"caption", "file_name", "folder"} plus the optional
-per-platform "youtube_title" and "threads_text".
+per-platform "youtube_title", "threads_text" and "tiktok_text", and the
+"search_phrase" printed on the video.
 """
 
 from __future__ import annotations
@@ -50,7 +51,16 @@ def _hook_start(data: dict) -> float | None:
 
 # Hard limits the variants are trimmed to (YouTube caps titles at 100 and
 # _shortsify may add nothing to the title; Threads' API caps posts at 500).
-VARIANT_LIMITS = {"youtube_title": 95, "threads_text": 500}
+# search_phrase is printed on the video (watermark card), so it stays short;
+# tiktok_text is copy-pasted by hand from the bot's TikTok kit.
+VARIANT_LIMITS = {
+    "youtube_title": 95,
+    "threads_text": 500,
+    "search_phrase": 32,
+    "tiktok_text": 400,
+}
+# Variants that must stay on one line.
+_ONE_LINE = {"youtube_title", "search_phrase"}
 
 
 def _variants(data: dict) -> dict[str, str]:
@@ -65,8 +75,8 @@ def _variants(data: dict) -> dict[str, str]:
         if not isinstance(value, str) or not value.strip():
             continue
         value = value.strip()
-        if key == "youtube_title":
-            value = " ".join(value.split())  # a title is one line
+        if key in _ONE_LINE:
+            value = " ".join(value.split())
         else:
             value = _tidy_caption(value)
         if len(value) > limit:

@@ -129,6 +129,8 @@ class PromptTests(unittest.TestCase):
         self.assertIn("#MentahanPOV #mentahanvideo", prompt)
         self.assertIn("Tag @mentahanpov biar aku repost", prompt)
         self.assertIn("ambil di s.id/mentahanpov", prompt)  # typeable where links aren't clickable
+        self.assertIn("Remix aja video ini", prompt)
+        self.assertIn('"search_phrase": "<step 11>", "tiktok_text": "<step 12>"', prompt)
         self.assertIn('then " | mentahan\n   video "', prompt)
         self.assertNotIn("Click the link in my bio", prompt)
 

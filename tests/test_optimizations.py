@@ -43,7 +43,7 @@ class KillRunTests(unittest.TestCase):
 class PrerenderTests(unittest.TestCase):
     def _run(self, *flags: str, render_error: Exception | None = None) -> mock.Mock:
         gem = SimpleNamespace(
-            caption="c", file_name="f", folder="d", hook_start_s=None
+            caption="c", file_name="f", folder="d", hook_start_s=None, variants={}
         )
         with tempfile.TemporaryDirectory() as tmp:
             video = Path(tmp) / "v.mp4"

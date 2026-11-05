@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import shutil
 import subprocess
@@ -175,7 +176,9 @@ class FirstTwoSecondsTests(unittest.TestCase):
                 check=True,
             )
             with mock.patch.object(watermark, "_ensure_logo", return_value=_logo(tmp)):
-                watermark.make_posting_copy(src, output_path=out, start_s=1.5)
+                watermark.make_posting_copy(
+                    src, output_path=out, start_s=1.5, label="Malang", keyword="mentahan hujan"
+                )
             probe = subprocess.run(
                 ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
                  "-show_entries", "format=duration", "-of", "json", str(out)],
@@ -208,6 +211,32 @@ class FirstTwoSecondsTests(unittest.TestCase):
                 )
         rows = card.call_args.args[0]
         self.assertEqual([icon for icon, _ in rows], ["pin", "speaker"])
+
+    def test_search_phrase_leads_the_card(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            watermark, "render_overlay_card", wraps=watermark.render_overlay_card
+        ) as card:
+            done = SimpleNamespace(returncode=0, stderr="")
+            with (
+                mock.patch.object(watermark, "_ensure_logo", return_value=Path("logo.png")),
+                mock.patch("core.video_facts.probe_stream_info", return_value=STREAM),
+                mock.patch.object(watermark.subprocess, "run", return_value=done),
+            ):
+                watermark.make_posting_copy(
+                    Path("in.mp4"),
+                    output_path=Path(tmp) / "o.mp4",
+                    label="Malang",
+                    keyword="mentahan hujan malam",
+                )
+                rows = card.call_args.args[0]
+                self.assertEqual(rows[0], ("search", "mentahan hujan malam"))
+                self.assertEqual([icon for icon, _ in rows], ["search", "pin", "speaker"])
+                off = dataclasses.replace(watermark.config, search_label=False)
+                with mock.patch.object(watermark, "config", off):
+                    watermark.make_posting_copy(
+                        Path("in.mp4"), output_path=Path(tmp) / "o.mp4", keyword="x"
+                    )
+                self.assertNotIn("search", [icon for icon, _ in card.call_args.args[0]])
 
 
 class RotationTests(unittest.TestCase):
@@ -269,6 +298,51 @@ class CaptionVariantTests(unittest.TestCase):
         self.assertIn("Judul YouTube: T", text)
         self.assertIn("Versi Threads:\nTH", text)
         self.assertEqual(bot._variants_text({}), "")
+
+    def test_search_phrase_is_one_short_line(self) -> None:
+        out = gemini._variants({"search_phrase": "  mentahan\nhujan   malam  ", "tiktok_text": "t"})
+        self.assertEqual(out["search_phrase"], "mentahan hujan malam")
+        self.assertEqual(out["tiktok_text"], "t")
+        long = gemini._variants({"search_phrase": "x" * 50})["search_phrase"]
+        self.assertLessEqual(len(long), 32)
+        self.assertIn(
+            "Teks di layar: mentahan hujan",
+            bot._variants_text({"caption_variants": {"search_phrase": "mentahan hujan"}}),
+        )
+
+    def test_search_phrase_is_not_a_caption(self) -> None:
+        variants = {"search_phrase": "mentahan hujan", "tiktok_text": "tt"}
+        for platform in ("facebook", "instagram", "youtube", "threads"):
+            self.assertNotIn("mentahan hujan", pipeline_main.caption_for(platform, "C", variants))
+
+
+class TikTokKitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sends_copy_and_caption(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = Path(tmp) / "post.mp4"
+            copy.write_bytes(b"x")
+            message = mock.AsyncMock()
+            entry = {
+                "caption_variants": {"tiktok_text": "Mentahan video hujan <3"},
+                "posting_copy_path": str(copy),
+            }
+            await bot._send_tiktok_kit(message, entry)
+        message.reply_video.assert_awaited_once()
+        text = message.reply_text.await_args.args[0]
+        self.assertIn("Mentahan video hujan &lt;3", text)  # HTML-escaped
+
+    async def test_skips_without_text_or_file_and_never_raises(self) -> None:
+        message = mock.AsyncMock()
+        await bot._send_tiktok_kit(message, {"caption_variants": {"tiktok_text": "t"}})
+        await bot._send_tiktok_kit(message, {"posting_copy_path": "/nope.mp4"})
+        message.reply_video.assert_not_awaited()
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = Path(tmp) / "post.mp4"
+            copy.write_bytes(b"x")
+            message.reply_video.side_effect = RuntimeError("telegram down")
+            await bot._send_tiktok_kit(
+                message, {"caption_variants": {"tiktok_text": "t"}, "posting_copy_path": str(copy)}
+            )
 
 
 if __name__ == "__main__":

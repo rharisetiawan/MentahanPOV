@@ -120,6 +120,16 @@ class Config:
     hook_trim: bool = field(
         default_factory=lambda: _env("HOOK_TRIM", "true").lower() != "false"
     )
+    # After each post the bot sends the posting copy + a TikTok caption for a
+    # manual TikTok upload (telegram_bot._send_tiktok_kit).
+    tiktok_kit: bool = field(
+        default_factory=lambda: _env("TIKTOK_KIT", "true").lower() != "false"
+    )
+    # Gemini's "mentahan …" search phrase as the card's first row: TikTok and
+    # Instagram read on-screen text for search. See core/watermark.py.
+    search_label: bool = field(
+        default_factory=lambda: _env("SEARCH_LABEL", "true").lower() != "false"
+    )
     sound_on_hint: bool = field(
         default_factory=lambda: _env("SOUND_ON_HINT", "true").lower() != "false"
     )

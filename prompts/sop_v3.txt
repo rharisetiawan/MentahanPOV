@@ -79,6 +79,17 @@ TASK
    where the most scroll-stopping moment begins. Viewers decide within two
    seconds whether to swipe, so the short-form copy may start there. If the
    opening is already strong, or nothing stands out, use 0.
+11. Write the on-screen search phrase: 2-4 lowercase Indonesian words,
+   max 28 characters, no emoji or hashtags, starting with "mentahan" —
+   what a creator would type into TikTok search to find this clip, e.g.
+   "mentahan hujan malam", "mentahan senja jalan", "mentahan kereta lewat".
+   It is printed on the video itself (TikTok and Instagram read on-screen
+   text for search), so keep it short and true to the footage.
+12. Write a TikTok caption, max 300 characters. Its first 50 characters
+   must be a search phrase a creator would type, in Indonesian, e.g.
+   "Mentahan video hujan malam Malang 🌧️ — " followed by the English hook
+   line. Then "📥 s.id/mentahanpov", then "🔍 <file_name>", then 5
+   lowercase hashtags: #mentahanvideo #mentahanstory plus the 3 from step 7.
 
 Assemble the caption text EXACTLY in this shape (keep the emoji, line
 breaks, and labels literally, substituting the placeholders). If the
@@ -94,10 +105,11 @@ never write a placeholder like "tidak tersedia":
 📥 Mentahannya gratis, tanpa watermark ({{RESOLUTION}}) — ambil di s.id/mentahanpov, folder '<chosen folder name>'.
 🔍 Kode file: <file_name>
 🙌 Pakai mentahannya? Tag @mentahanpov biar aku repost!
+🎬 Mau langsung pakai? Remix aja video ini.
 
 #MentahanPOV #mentahanvideo #<tag1> #<tag2> #<tag3>
 
 OUTPUT
 Return ONLY strict JSON — no markdown fences, no commentary before or
 after — with exactly these keys:
-{"caption": "<the full caption text above>", "file_name": "<file_name>", "folder": "<chosen folder name, verbatim from the list>", "youtube_title": "<step 8>", "threads_text": "<step 9>", "hook_start_s": <step 10, a number>}
+{"caption": "<the full caption text above>", "file_name": "<file_name>", "folder": "<chosen folder name, verbatim from the list>", "youtube_title": "<step 8>", "threads_text": "<step 9>", "hook_start_s": <step 10, a number>, "search_phrase": "<step 11>", "tiktok_text": "<step 12>"}

@@ -644,6 +644,8 @@ def _variants_text(entry: dict) -> str:
         parts.append(f"🎬 Judul YouTube: {variants['youtube_title']}\n\n")
     if variants.get("threads_text"):
         parts.append(f"🧵 Versi Threads:\n{variants['threads_text']}\n\n")
+    if variants.get("search_phrase"):
+        parts.append(f"🔎 Teks di layar: {variants['search_phrase']}\n\n")
     return "".join(parts)
 
 
@@ -896,8 +898,38 @@ async def _execute_post(
 
     entry = pipeline_state.get(config.state_file, video_path)
     await _send_caption_recap(message, entry.get("caption", ""))
+    await _send_tiktok_kit(message, entry)
     await _send_retry_keyboard(message, video_path, entry)
     await _after_run()
+
+
+async def _send_tiktok_kit(message, entry: dict) -> None:
+    """TikTok is archived as an automated platform (archive/tiktok/), but it
+    is where Indonesian "mentahan" searches happen — so after each post the
+    bot hands over everything for a 30-second manual upload: the posting
+    copy itself and a TikTok caption that leads with a search phrase.
+
+    Best effort: a missing file or a failed send never affects the post.
+    """
+    if not config.tiktok_kit:
+        return
+    text = (entry.get("caption_variants") or {}).get("tiktok_text")
+    copy = entry.get("posting_copy_path")
+    if not text or not copy or not Path(copy).exists():
+        return
+    try:
+        with open(copy, "rb") as fh:
+            await message.reply_video(
+                video=fh,
+                caption="🎵 Kit TikTok — simpan videonya, upload manual di TikTok.",
+                supports_streaming=True,
+            )
+        await message.reply_text(
+            f"🎵 Caption TikTok (tap buat copy):\n<pre>{html.escape(text)}</pre>",
+            parse_mode="HTML",
+        )
+    except Exception:  # noqa: BLE001 — a kit is a convenience, never fatal
+        log.exception("[bot] couldn't send the TikTok kit")
 
 
 async def _after_run() -> None:
@@ -945,10 +977,14 @@ async def handle_text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     # A hand-written caption replaces Gemini's per-platform rewrites too:
     # they were derived from the old text and would contradict the edit.
+    # The on-screen search phrase is about the footage, not the caption,
+    # and is already in the pre-rendered copy, so it stays.
+    old = pipeline_state.get(config.state_file, video_path).get("caption_variants") or {}
+    kept = {k: old[k] for k in ("search_phrase",) if old.get(k)}
     pipeline_state.update(
         config.state_file,
         video_path,
-        {"caption": update.message.text, "caption_variants": {}},
+        {"caption": update.message.text, "caption_variants": kept},
     )
     await update.message.reply_text(
         "✅ Caption diupdate (dipakai juga buat YouTube & Threads)."

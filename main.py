@@ -255,6 +255,7 @@ def step_watermark(
     skip: bool,
     label: str | None = None,
     start_s: float | None = None,
+    keyword: str | None = None,
 ) -> Path:
     entry = state.get(config.state_file, video)
     cached = entry.get("posting_copy_path")
@@ -263,7 +264,7 @@ def step_watermark(
         return Path(cached)
     out_path = config.posting_copy_dir / f"{state.video_key(video)}_post.mp4"
     watermark.make_posting_copy(
-        video, output_path=out_path, label=label, start_s=start_s
+        video, output_path=out_path, label=label, start_s=start_s, keyword=keyword
     )
     state.update(config.state_file, video, {"posting_copy_path": str(out_path)})
     return out_path
@@ -415,6 +416,7 @@ def main() -> int:
                 skip=False,
                 label=label,
                 start_s=gemini_out.hook_start_s,
+                keyword=gemini_out.variants.get("search_phrase"),
             )
             if args.dry_run and args.prerender
             else None
@@ -439,6 +441,7 @@ def main() -> int:
         skip=args.skip_watermark,
         label=label,
         start_s=gemini_out.hook_start_s,
+        keyword=gemini_out.variants.get("search_phrase"),
     )
     log.info("Posting copy ready: %s", post_video)
 

@@ -137,7 +137,19 @@ def _draw_speaker(draw, cx: float, cy: float, size: float) -> None:
         draw.arc(box, start=-45, end=45, fill=_WHITE, width=width)
 
 
-_ICONS = {"pin": _draw_pin, "speaker": _draw_speaker}
+def _draw_search(draw, cx: float, cy: float, size: float) -> None:
+    r = size * 0.32
+    lx, ly = cx - size * 0.1, cy - size * 0.1
+    width = max(2, round(size * 0.14))
+    draw.ellipse((lx - r, ly - r, lx + r, ly + r), outline=_WHITE, width=width)
+    draw.line(
+        (lx + r * 0.7, ly + r * 0.7, cx + size * 0.42, cy + size * 0.42),
+        fill=_WHITE,
+        width=width,
+    )
+
+
+_ICONS = {"pin": _draw_pin, "speaker": _draw_speaker, "search": _draw_search}
 
 
 def render_overlay_card(
@@ -279,6 +291,7 @@ def make_posting_copy(
     output_path: Path,
     label: str | None = None,
     start_s: float | None = None,
+    keyword: str | None = None,
 ) -> Path:
     """Render a watermarked, feed-sized copy of `video_path` at `output_path`.
 
@@ -287,10 +300,12 @@ def make_posting_copy(
     and is tuned for the first two seconds that decide whether people swipe:
 
     - starts at Gemini's hook moment (`start_s`, see hook_start());
-    - a card fades in top-left for LOCATION_LABEL_SECONDS: the place
-      (`label`, e.g. "Jl. Basuki Rahmat · Malang") and a "Sound on" hint —
-      the ambient audio is the point and feeds scroll muted. Top-left
-      because the platforms' own UI covers the bottom;
+    - a card fades in top-left for LOCATION_LABEL_SECONDS: the search
+      phrase (`keyword`, e.g. "mentahan hujan malam" — TikTok and Instagram
+      read on-screen text for search), the place (`label`, e.g.
+      "Jl. Basuki Rahmat · Malang") and a "Sound on" hint — the ambient
+      audio is the point and feeds scroll muted. Top-left because the
+      platforms' own UI covers the bottom;
     - loops seamlessly and has its loudness normalised (_build_graph).
     """
     from core.video_facts import probe_stream_info
@@ -304,6 +319,8 @@ def make_posting_copy(
     length = max(0.0, info.duration - start)
 
     rows: list[tuple[str, str]] = []
+    if keyword and config.search_label:
+        rows.append(("search", keyword))
     if label:
         rows.append(("pin", label))
     if config.sound_on_hint and info.has_audio and config.sound_on_text:
