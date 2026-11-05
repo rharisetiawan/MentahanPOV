@@ -24,6 +24,25 @@ log = logging.getLogger(__name__)
 
 _PLACEHOLDER_TEXT = "MentahanPOV"
 
+# Rounded brand face for the on-video card (SIL OFL, licence next to it):
+# the same chunky, friendly shape as the "POV" logo, instead of whatever
+# system sans the box happens to have (DejaVu Sans Bold looked stiff).
+_BRAND_FONT = Path(__file__).parent.parent / "assets" / "fonts" / "Fredoka.ttf"
+
+
+def _load_brand_font(size: int):
+    from PIL import ImageFont
+
+    try:
+        font = ImageFont.truetype(str(_BRAND_FONT), size)
+    except OSError:
+        return _load_font(size)
+    try:
+        font.set_variation_by_name("SemiBold")
+    except (OSError, ValueError):  # FreeType without variation support
+        pass
+    return font
+
 
 def _load_font(size: int):
     from PIL import ImageFont
@@ -98,29 +117,38 @@ def _posting_width(video_path: Path) -> int:
 
 
 _WHITE = (255, 255, 255, 255)
-_PILL = (0, 0, 0, 150)
+_BRAND_PURPLE = (132, 85, 232)  # sampled from the MentahanPOV avatar
+
+# CARD_STYLE → (pill fill, text + icon colour). "purple": brand-purple pill,
+# white text; "white": white pill, purple text — like the avatar itself.
+_CARD_STYLES = {
+    "purple": ((*_BRAND_PURPLE, 225), _WHITE),
+    "white": ((255, 255, 255, 235), (*_BRAND_PURPLE, 255)),
+}
 
 
-def _draw_pin(draw, cx: float, cy: float, size: float) -> None:
+def _draw_pin(draw, cx: float, cy: float, size: float, fg, bg) -> None:
     r = size / 2
     head_y = cy - r * 0.45
-    draw.ellipse((cx - r, head_y - r, cx + r, head_y + r), fill=_WHITE)
+    draw.ellipse((cx - r, head_y - r, cx + r, head_y + r), fill=fg)
     draw.polygon(
         [
             (cx - r * 0.82, head_y + r * 0.45),
             (cx + r * 0.82, head_y + r * 0.45),
             (cx, head_y + r * 2.1),
         ],
-        fill=_WHITE,
+        fill=fg,
     )
     hole = r * 0.38
-    draw.ellipse((cx - hole, head_y - hole, cx + hole, head_y + hole), fill=_PILL)
+    draw.ellipse((cx - hole, head_y - hole, cx + hole, head_y + hole), fill=bg)
 
 
-def _draw_speaker(draw, cx: float, cy: float, size: float) -> None:
+def _draw_speaker(draw, cx: float, cy: float, size: float, fg, bg) -> None:
     s = size / 2
     left = cx - s
-    draw.rectangle((left, cy - s * 0.35, left + s * 0.5, cy + s * 0.35), fill=_WHITE)
+    draw.rounded_rectangle(
+        (left, cy - s * 0.35, left + s * 0.5, cy + s * 0.35), radius=s * 0.12, fill=fg
+    )
     draw.polygon(
         [
             (left + s * 0.5, cy - s * 0.35),
@@ -128,64 +156,93 @@ def _draw_speaker(draw, cx: float, cy: float, size: float) -> None:
             (left + s * 1.1, cy + s * 0.85),
             (left + s * 0.5, cy + s * 0.35),
         ],
-        fill=_WHITE,
+        fill=fg,
     )
     width = max(2, round(size * 0.1))
     for k in (0.55, 0.9):
         rad = s * k
         box = (left + s * 1.1 - rad, cy - rad, left + s * 1.1 + rad, cy + rad)
-        draw.arc(box, start=-45, end=45, fill=_WHITE, width=width)
+        draw.arc(box, start=-45, end=45, fill=fg, width=width)
 
 
-def _draw_search(draw, cx: float, cy: float, size: float) -> None:
+def _draw_search(draw, cx: float, cy: float, size: float, fg, bg) -> None:
     r = size * 0.32
     lx, ly = cx - size * 0.1, cy - size * 0.1
     width = max(2, round(size * 0.14))
-    draw.ellipse((lx - r, ly - r, lx + r, ly + r), outline=_WHITE, width=width)
+    draw.ellipse((lx - r, ly - r, lx + r, ly + r), outline=fg, width=width)
     draw.line(
         (lx + r * 0.7, ly + r * 0.7, cx + size * 0.42, cy + size * 0.42),
-        fill=_WHITE,
+        fill=fg,
         width=width,
     )
+    # Round the handle's end so it matches the font's soft corners.
+    end = width / 2
+    hx, hy = cx + size * 0.42, cy + size * 0.42
+    draw.ellipse((hx - end, hy - end, hx + end, hy + end), fill=fg)
 
 
 _ICONS = {"pin": _draw_pin, "speaker": _draw_speaker, "search": _draw_search}
 
 
 def render_overlay_card(
-    rows: list[tuple[str, str]], *, video_size: tuple[int, int], path: Path
+    rows: list[tuple[str, str]],
+    *,
+    video_size: tuple[int, int],
+    path: Path,
+    style: str | None = None,
 ) -> Path:
     """Stack of "icon + text" pills as one transparent PNG sized for the video.
 
-    Icons are drawn as shapes, not emoji: the box has no colour-emoji font,
-    and a missing glyph would render as an empty square.
+    Styled after the MentahanPOV logo: rounded brand font, brand colours
+    (CARD_STYLE), soft drop shadow. Icons are drawn as shapes, not emoji:
+    the box has no colour-emoji font, and a missing glyph would render as
+    an empty square.
     """
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageFilter
 
-    font_px = max(16, round(min(video_size) * 0.034))
-    font = _load_font(font_px)
+    fill, fg = _CARD_STYLES.get(style or config.card_style, _CARD_STYLES["purple"])
+    font_px = max(16, round(min(video_size) * 0.036))
+    font = _load_brand_font(font_px)
     probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
-    pad_x, pad_y = round(font_px * 0.7), round(font_px * 0.45)
-    icon_w, gap = round(font_px * 0.85), round(font_px * 0.4)
-    row_gap = round(font_px * 0.35)
+    pad_x, pad_y = round(font_px * 0.75), round(font_px * 0.42)
+    icon_w, gap = round(font_px * 0.8), round(font_px * 0.38)
+    row_gap = round(font_px * 0.3)
+    # Room around the pills for the shadow to fall into.
+    blur = max(2, round(font_px * 0.18))
+    margin = blur * 3
 
     pills = []
     for icon, text in rows:
         left, top, right, bottom = probe.textbbox((0, 0), text, font=font)
-        height = (bottom - top) + 2 * pad_y
+        # Height from the font's own ascent/descent, not this text's ink, so
+        # rows with and without descenders ("Malang" vs "Sound on") match.
+        ascent, descent = font.getmetrics()
+        height = ascent + descent + 2 * pad_y
         width = pad_x + icon_w + gap + (right - left) + pad_x
-        pills.append((icon, text, left, top, width, height))
+        pills.append((icon, text, left, width, height))
 
-    total_w = max(p[4] for p in pills)
-    total_h = sum(p[5] for p in pills) + row_gap * (len(pills) - 1)
-    img = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    y = 0
-    for icon, text, left, top, width, height in pills:
-        draw.rounded_rectangle((0, y, width - 1, y + height - 1), radius=height // 2, fill=_PILL)
-        _ICONS[icon](draw, pad_x + icon_w / 2, y + height / 2, icon_w * 0.9)
-        draw.text((pad_x + icon_w + gap - left, y + pad_y - top), text, font=font, fill=_WHITE)
+    total_w = max(p[3] for p in pills) + 2 * margin
+    total_h = sum(p[4] for p in pills) + row_gap * (len(pills) - 1) + 2 * margin
+    shadow = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
+    card = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
+    sdraw, draw = ImageDraw.Draw(shadow), ImageDraw.Draw(card)
+    y = margin
+    for icon, text, left, width, height in pills:
+        box = (margin, y, margin + width - 1, y + height - 1)
+        sdraw.rounded_rectangle(
+            (box[0], box[1] + blur, box[2], box[3] + blur), radius=height // 2, fill=(0, 0, 0, 90)
+        )
+        draw.rounded_rectangle(box, radius=height // 2, fill=fill)
+        _ICONS[icon](draw, margin + pad_x + icon_w / 2, y + height / 2, icon_w * 0.9, fg, fill)
+        draw.text(
+            (margin + pad_x + icon_w + gap - left, y + pad_y),
+            text,
+            font=font,
+            fill=fg,
+        )
         y += height + row_gap
+    img = shadow.filter(ImageFilter.GaussianBlur(blur))
+    img.alpha_composite(card)
     path.parent.mkdir(parents=True, exist_ok=True)
     img.save(path)
     return path
