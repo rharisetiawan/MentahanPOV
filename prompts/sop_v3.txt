@@ -79,12 +79,12 @@ TASK
    where the most scroll-stopping moment begins. Viewers decide within two
    seconds whether to swipe, so the short-form copy may start there. If the
    opening is already strong, or nothing stands out, use 0.
-11. Write the on-screen search phrase: 2-4 lowercase Indonesian words,
-   max 28 characters, no emoji or hashtags, starting with "mentahan" —
-   what a creator would type into TikTok search to find this clip, e.g.
-   "mentahan hujan malam", "mentahan senja jalan", "mentahan kereta lewat".
-   It is printed on the video itself (TikTok and Instagram read on-screen
-   text for search), so keep it short and true to the footage.
+11. Write the on-screen title: 2-4 English words in Title Case, max 28
+   characters, no emoji or hashtags, naming what the clip is, e.g.
+   "Rainy Night Ride", "Golden Hour Street", "Morning Birdsong",
+   "Passing Train". It is printed on the video itself, so it must look
+   good and stay true to the footage. Plain, everyday words only — never
+   the word "mentahan", never a place name (the location has its own row).
 12. Write a TikTok caption, max 300 characters. Its first 50 characters
    must be a search phrase a creator would type, in Indonesian, e.g.
    "Mentahan video hujan malam Malang 🌧️ — " followed by the English hook

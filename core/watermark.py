@@ -357,9 +357,9 @@ def make_posting_copy(
     and is tuned for the first two seconds that decide whether people swipe:
 
     - starts at Gemini's hook moment (`start_s`, see hook_start());
-    - a card fades in top-left for LOCATION_LABEL_SECONDS: the search
-      phrase (`keyword`, e.g. "mentahan hujan malam" — TikTok and Instagram
-      read on-screen text for search), the place (`label`, e.g.
+    - a card fades in top-left for LOCATION_LABEL_SECONDS: a short English
+      title (`keyword`, e.g. "Rainy Night Ride" — TikTok and Instagram read
+      on-screen text for search), the place (`label`, e.g.
       "Jl. Basuki Rahmat · Malang") and a "Sound on" hint — the ambient
       audio is the point and feeds scroll muted. Top-left because the
       platforms' own UI covers the bottom;

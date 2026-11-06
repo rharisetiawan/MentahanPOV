@@ -128,7 +128,7 @@ class Config:
     # Colours of that card, after the MentahanPOV logo: "purple" (brand-purple
     # pill, white text) or "white" (white pill, purple text).
     card_style: str = field(default_factory=lambda: _env("CARD_STYLE", "purple").lower())
-    # Gemini's "mentahan …" search phrase as the card's first row: TikTok and
+    # Gemini's short English title as the card's first row: TikTok and
     # Instagram read on-screen text for search. See core/watermark.py.
     search_label: bool = field(
         default_factory=lambda: _env("SEARCH_LABEL", "true").lower() != "false"
