@@ -1735,6 +1735,12 @@ async def daily_cleanup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 # --- post performance --------------------------------------------------------
 
 _PLATFORM_SHORT = {"youtube": "YT", "facebook": "FB", "instagram": "IG", "threads": "TH"}
+_MISSING_VIEWS_HINT = {
+    "youtube": "YouTube belum terukur: isi YOUTUBE_API_KEY di .env.",
+    "instagram": "Instagram belum terukur: token Meta butuh izin instagram_manage_insights.",
+    "facebook": "Facebook belum terukur: angka muncul untuk post berikutnya.",
+    "threads": "Threads belum terukur: token Threads butuh izin threads_manage_insights.",
+}
 
 
 def _fmt_count(n: float) -> str:
@@ -1760,13 +1766,15 @@ async def handle_insights(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         prefix += "\n\n"
 
     rows = await asyncio.to_thread(insights.ranked, days=30)
+    gaps = await asyncio.to_thread(insights.missing_views, days=30)
+    gaps_note = "".join(f"\n⚠️ {_MISSING_VIEWS_HINT.get(p, p)}" for p in gaps)
     if not rows:
         await update.message.reply_text(
             prefix + "Belum ada data performa.\n\n"
             "Angka diambil otomatis ±24 jam dan ±72 jam setelah posting "
             "(YouTube, Facebook, Instagram, Threads). Butuh YOUTUBE_API_KEY "
             "di .env untuk YouTube, dan token Meta/Threads yang punya izin "
-            "insights. `/insights refresh` buat coba ambil sekarang."
+            "insights. `/insights refresh` buat coba ambil sekarang." + gaps_note
         )
         return
 
@@ -1795,9 +1803,9 @@ async def handle_insights(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "sebagai referensi gaya."
         if insights.top_hooks()
         else f"\n\nHook terbaik baru dipakai Gemini setelah ≥{config.insights_min_samples} "
-        f"post punya data (sekarang {len(rows)})."
+        "post punya views YouTube/Instagram."
     )
-    await update.message.reply_text(prefix + "\n".join(lines) + hooks_note)
+    await update.message.reply_text(prefix + "\n".join(lines) + hooks_note + gaps_note)
 
 
 async def insights_job(context: ContextTypes.DEFAULT_TYPE) -> None:

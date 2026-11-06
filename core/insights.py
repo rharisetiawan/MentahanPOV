@@ -46,6 +46,9 @@ from distributors.meta_graph import graph_url
 log = logging.getLogger(__name__)
 
 INSIGHT_PLATFORMS = ("youtube", "facebook", "instagram", "threads")
+# Where a hook's view count means something: Threads and the Facebook Page
+# reach a handful of people, too few to tell a good hook from a lucky one.
+HOOK_SIGNAL_PLATFORMS = ("youtube", "instagram")
 WINDOWS_H = (24, 72)
 # How long after a window opens a snapshot can still be taken. Past this the
 # number would be a "5 days" figure filed under "24h" — worse than missing.
@@ -181,6 +184,23 @@ def _facebook(post_id: str) -> dict[str, float]:
         if name in found:
             metrics["views"] = found[name]
             break
+    # video_insights needs read_insights; the video's own `views` field
+    # doesn't, so a token without that permission still gets a real number.
+    # Asked for separately: on a non-video id it fails the whole request.
+    if "views" not in metrics:
+        try:
+            views = _num(
+                _get_json(
+                    graph_url(post_id),
+                    {"fields": "views", "access_token": token},
+                    label="facebook views",
+                ).get("views")
+            )
+        except Unavailable as exc:
+            log.info("[insights] facebook views field unavailable: %s", exc)
+            views = None
+        if views is not None:
+            metrics["views"] = views
     if not metrics:
         raise Unavailable("facebook: tidak ada angka yang bisa dibaca")
     return metrics
@@ -206,6 +226,7 @@ def _instagram(post_id: str) -> dict[str, float]:
     # One request per metric: a single unsupported name in a comma list makes
     # Graph reject the whole call, and which names are valid for Reels has
     # changed more than once (plays -> views, ...).
+    last_error = ""
     for name in ("views", "plays", "reach", "saved", "shares"):
         try:
             got = _metric_values(
@@ -215,12 +236,17 @@ def _instagram(post_id: str) -> dict[str, float]:
                     label=f"instagram {name}",
                 )
             )
-        except Unavailable:
+        except Unavailable as exc:
+            last_error = str(exc)
             continue
         if name in got:
             metrics[name] = got[name]
     if "views" not in metrics and "plays" in metrics:
         metrics["views"] = metrics["plays"]
+    if "views" not in metrics and last_error:
+        # Usually "(#10) Application does not have permission": the token lacks
+        # instagram_manage_insights. Only likes/comments get recorded then.
+        log.warning("[insights] instagram has no views: %s", last_error)
     if not metrics:
         raise Unavailable("instagram: tidak ada angka yang bisa dibaca")
     return metrics
@@ -401,8 +427,10 @@ class Row:
 
 
 def ranked(*, days: int = 30, now: datetime | None = None) -> list[Row]:
-    """Posts that have performance data, best first (by total views across
-    the platforms that reported any)."""
+    """Posts that have view counts, best first (by total views across the
+    platforms that reported any). Likes never stand in for views: a snapshot
+    with only likes says nothing comparable, and counting it as "1 view"
+    silently distorts the ranking."""
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(days=days)
     rows: list[Row] = []
@@ -413,9 +441,8 @@ def ranked(*, days: int = 30, now: datetime | None = None) -> list[Row]:
             if metrics is None:
                 continue
             views = metrics.get("views")
-            if views is None:
-                views = metrics.get("likes", 0)
-            per_platform[platform] = views
+            if views is not None:
+                per_platform[platform] = views
         if not per_platform:
             continue
         times = [
@@ -446,19 +473,44 @@ def platform_averages(*, days: int = 30) -> dict[str, tuple[int, float]]:
     return {p: (len(v), sum(v) / len(v)) for p, v in sums.items()}
 
 
+def missing_views(*, days: int = 30, now: datetime | None = None) -> list[str]:
+    """Platforms we posted to recently that have no view count at all — so
+    /insights can say so instead of a ranking that quietly leaves them out."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=days)
+    posted: set[str] = set()
+    measured: set[str] = set()
+    for entry in pipeline_state.load_all(config.state_file).values():
+        for platform, info in entry.get("platforms", {}).items():
+            at = _parse_ts(info.get("at"))
+            if platform not in INSIGHT_PLATFORMS or info.get("status") != "ok":
+                continue
+            if at is None or at < cutoff:
+                continue
+            posted.add(platform)
+            if (best_metrics(entry, platform) or {}).get("views") is not None:
+                measured.add(platform)
+    return [p for p in INSIGHT_PLATFORMS if p in posted and p not in measured]
+
+
 def top_hooks(count: int | None = None) -> list[str]:
     """Opening lines of the best past posts, for core/gemini.py's prompt.
 
     Empty until at least INSIGHTS_MIN_SAMPLES posts have numbers: ranking
     three videos and calling the winner "what works" would just teach the
-    model to imitate noise. Only the hook line is returned — never the whole
-    caption — so no place name, hashtag or file name can leak into a
-    different video's caption.
+    model to imitate noise. Only posts measured on a platform with real reach
+    (HOOK_SIGNAL_PLATFORMS) count, for the same reason. Only the hook line is
+    returned — never the whole caption — so no place name, hashtag or file
+    name can leak into a different video's caption.
     """
     count = config.caption_top_hooks if count is None else count
     if count <= 0 or not config.insights_enabled:
         return []
-    rows = ranked(days=90)
+    rows = [
+        row
+        for row in ranked(days=90)
+        if any(row.per_platform.get(p, 0) > 0 for p in HOOK_SIGNAL_PLATFORMS)
+    ]
     if len(rows) < config.insights_min_samples:
         return []
     hooks: list[str] = []

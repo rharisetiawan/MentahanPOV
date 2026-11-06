@@ -174,13 +174,92 @@ class StateBackedTests(unittest.TestCase):
         rows = {}
         rows.update(self._with_metrics("a", "Hook A 🔊\n\nbody", {"youtube": 100}))
         rows.update(self._with_metrics("b", "Hook B\n\nbody", {"youtube": 50, "facebook": 400}))
-        rows.update(self._with_metrics("c", "Hook C\n\nbody", {"threads": 10}))
+        rows.update(self._with_metrics("c", "Hook C\n\nbody", {"instagram": 10}))
         self._write(rows)
 
         ranked = insights.ranked(days=30, now=NOW)
         self.assertEqual([r.key for r in ranked], ["b", "a", "c"])
         self.assertEqual(ranked[0].total_views, 450)
         self.assertEqual(insights.top_hooks(), ["Hook B", "Hook A 🔊"])
+
+    def test_threads_or_facebook_alone_never_prove_a_hook(self) -> None:
+        rows = {}
+        for k in "abcd":
+            rows.update(
+                self._with_metrics(k, f"Hook {k}\n\nbody", {"threads": 40, "facebook": 3})
+            )
+        self._write(rows)
+        self.assertEqual(len(insights.ranked(days=30, now=NOW)), 4)
+        self.assertEqual(insights.top_hooks(), [])
+
+    def test_likes_never_count_as_views(self) -> None:
+        likes_only = self._entry("L\n\nbody", posted_h_ago=100, instagram={})
+        likes_only["insights"] = {
+            "instagram": {"72h": {"at": _ago(1), "metrics": {"likes": 9}}}
+        }
+        rows = {"likes": likes_only}
+        rows.update(self._with_metrics("v", "V\n\nbody", {"youtube": 5}))
+        self._write(rows)
+        self.assertEqual([r.key for r in insights.ranked(days=30, now=NOW)], ["v"])
+
+    def test_missing_views_names_unmeasured_platforms(self) -> None:
+        entry = self._entry("L", posted_h_ago=100, instagram={}, youtube={}, threads={})
+        entry["insights"] = {
+            "instagram": {"72h": {"at": _ago(1), "metrics": {"likes": 9}}},
+            "threads": {"72h": {"at": _ago(1), "metrics": {"views": 9}}},
+        }
+        old = self._entry("Old", posted_h_ago=24 * 90, facebook={})
+        self._write({"a": entry, "old": old})
+        self.assertEqual(
+            insights.missing_views(days=30, now=NOW),
+            ["youtube", "instagram"],
+        )
+
+    def _get_json_stub(self, responses: dict):
+        def stub(url, params, *, label):
+            result = responses[label]
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        return stub
+
+    def test_facebook_views_field_without_read_insights(self) -> None:
+        stub = self._get_json_stub(
+            {
+                "facebook": {"likes": {"summary": {"total_count": 2}}},
+                "facebook insights": insights.Unavailable("(#200) read_insights missing"),
+                "facebook views": {"views": 37},
+            }
+        )
+        with mock.patch.object(insights, "_get_json", stub):
+            self.assertEqual(insights._facebook("123"), {"likes": 2, "views": 37})
+
+    def test_facebook_insights_win_over_the_field(self) -> None:
+        stub = self._get_json_stub(
+            {
+                "facebook": {},
+                "facebook insights": {
+                    "data": [{"name": "total_video_views", "values": [{"value": 50}]}]
+                },
+            }
+        )
+        with mock.patch.object(insights, "_get_json", stub):
+            self.assertEqual(insights._facebook("123"), {"views": 50})
+
+    def test_instagram_without_permission_keeps_likes(self) -> None:
+        denied = insights.Unavailable("instagram: HTTP 400 (#10) no permission")
+
+        def stub(url, params, *, label):
+            if label == "instagram":
+                return {"like_count": 4, "comments_count": 1}
+            raise denied
+
+        with mock.patch.object(insights, "_get_json", stub), self.assertLogs(
+            insights.log, "WARNING"
+        ) as logs:
+            self.assertEqual(insights._instagram("9"), {"likes": 4, "comments": 1})
+        self.assertIn("no permission", logs.output[0])
 
     def test_top_hooks_wait_for_enough_samples(self) -> None:
         rows = {}
