@@ -1,0 +1,53 @@
+{
+ "_start": "2026-11-09",
+ "finalis-01:full": {
+  "id": "gb5FOeFjoOk",
+  "publishAt": "2026-11-13T12:00:00Z",
+  "thumbnail": "HTTP 403: {\n  \"error\": {\n    \"code\": 403,\n    \"message\": \"The authenticated user doesn't have permissions to upload and set custom video thumbnails.\",\n    \"errors\": [\n   "
+ },
+ "finalis-01:short": {
+  "id": "jbqLhSQFnis",
+  "publishAt": "2026-11-13T05:00:00Z",
+  "thumbnail": "-"
+ },
+ "finalis-04:full": {
+  "id": "Xf9KC7_M3KE",
+  "publishAt": "2026-11-11T12:00:00Z",
+  "thumbnail": "HTTP 403: {\n  \"error\": {\n    \"code\": 403,\n    \"message\": \"The authenticated user doesn't have permissions to upload and set custom video thumbnails.\",\n    \"errors\": [\n   "
+ },
+ "finalis-04:short": {
+  "id": "ObC5o6rxOos",
+  "publishAt": "2026-11-11T05:00:00Z",
+  "thumbnail": "-"
+ },
+ "finalis-14:full": {
+  "id": "vPuRapawcls",
+  "publishAt": "2026-11-10T12:00:00Z",
+  "thumbnail": "HTTP 403: {\n  \"error\": {\n    \"code\": 403,\n    \"message\": \"The authenticated user doesn't have permissions to upload and set custom video thumbnails.\",\n    \"errors\": [\n   "
+ },
+ "finalis-14:short": {
+  "id": "n-SDmqBu6oA",
+  "publishAt": "2026-11-10T05:00:00Z",
+  "thumbnail": "-"
+ },
+ "finalis-15:full": {
+  "id": "qCQis6uERrE",
+  "publishAt": "2026-11-12T12:00:00Z",
+  "thumbnail": "HTTP 403: {\n  \"error\": {\n    \"code\": 403,\n    \"message\": \"The authenticated user doesn't have permissions to upload and set custom video thumbnails.\",\n    \"errors\": [\n   "
+ },
+ "finalis-15:short": {
+  "id": "VgIwQTodsok",
+  "publishAt": "2026-11-12T05:00:00Z",
+  "thumbnail": "-"
+ },
+ "pengumuman-juara:full": {
+  "id": "-eAIl1Wt5UY",
+  "publishAt": "2026-11-09T12:00:00Z",
+  "thumbnail": "HTTP 403: {\n  \"error\": {\n    \"code\": 403,\n    \"message\": \"The authenticated user doesn't have permissions to upload and set custom video thumbnails.\",\n    \"errors\": [\n   "
+ },
+ "pengumuman-juara:short": {
+  "id": "WxZGs8xzejs",
+  "publishAt": "2026-11-09T05:00:00Z",
+  "thumbnail": "-"
+ }
+}

@@ -112,6 +112,15 @@ perintah yang sama bisa diulang kalau terhenti.
 - `youtube.txt`: judul + deskripsi untuk ditempel, lalu catatan upload yang
   tidak ikut ditempel (monetisasi nonaktif, Unlisted dulu, cek Content ID).
 
+## Publikasi terjadwal dari box
+
+Media ada di Drive (`scripts/doctor_idol_backup.py`), antrean dibuat
+`scripts/doctor_idol_social_queue.py`, dan `scripts/doctor_idol_poster.py` jalan
+di box lewat `/etc/cron.d/mentahanpov-doctor-idol`, dari
+`/www/apps/mentahanpov/state/doctor_idol/`. Hasil ada di `done.json`,
+`youtube_queue.json`, dan `poster.log` di folder itu. Hapus file cron untuk berhenti.
+Masalah dikirim ke Telegram; posting yang gagal tidak dicoba ulang otomatis.
+
 ## Aturan karena ini unofficial
 
 - Jangan pakai logo/nama Doctor Idol sebagai identitas akun, dan jangan
