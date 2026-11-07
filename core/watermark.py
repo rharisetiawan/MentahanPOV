@@ -205,12 +205,27 @@ def _draw_chat(draw, cx: float, cy: float, size: float, fg, bg) -> None:
         draw.ellipse((x - dot, cy - s * 0.15 - dot, x + dot, cy - s * 0.15 + dot), fill=bg)
 
 
+def _draw_trophy(draw, cx: float, cy: float, size: float, fg, bg) -> None:
+    """A cup on a stand, for winner announcements."""
+    s = size / 2
+    w = max(2, round(size * 0.09))
+    draw.chord((cx - s * 0.62, cy - s * 1.25, cx + s * 0.62, cy + s * 0.35), start=0, end=180, fill=fg)
+    draw.rectangle((cx - s * 0.62, cy - s * 0.8, cx + s * 0.62, cy - s * 0.45), fill=fg)
+    for side in (-1, 1):
+        x0 = cx + side * s * 0.62
+        box = (min(x0, x0 + side * s * 0.38), cy - s * 0.75, max(x0, x0 + side * s * 0.38), cy - s * 0.05)
+        draw.arc(box, start=270 if side > 0 else 90, end=90 if side > 0 else 270, fill=fg, width=w)
+    draw.rectangle((cx - s * 0.1, cy + s * 0.3, cx + s * 0.1, cy + s * 0.6), fill=fg)
+    draw.rounded_rectangle((cx - s * 0.45, cy + s * 0.6, cx + s * 0.45, cy + s * 0.85), radius=s * 0.08, fill=fg)
+
+
 _ICONS = {
     "pin": _draw_pin,
     "speaker": _draw_speaker,
     "search": _draw_search,
     "eye": _draw_eye,
     "chat": _draw_chat,
+    "trophy": _draw_trophy,
 }
 
 

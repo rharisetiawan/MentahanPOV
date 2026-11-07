@@ -41,6 +41,8 @@ def is_vertical(width: int, height: int, tolerance: float = 0.04) -> bool:
 
 
 def card_rows(finalist: Finalist) -> list[tuple[str, str]]:
+    if finalist.kind == "announcement":
+        return [("trophy", line) for line in finalist.card]
     rows = []
     if finalist.label:
         rows.append(("pin", finalist.label))
@@ -89,16 +91,20 @@ def plan_cards(finalist: Finalist, settings: Settings) -> list[Card]:
     total = finalist.reel_length(settings.transition_s)
     cards: list[Card] = []
     t = 0.0
-    if settings.hook_text and settings.hook_s > 0:
-        cards.append(Card((("eye", settings.hook_text),), 0.0, settings.hook_s, True, "hook"))
+    hook = finalist.hook or settings.hook_text
+    if hook and settings.hook_s > 0:
+        cards.append(Card((("eye", hook),), 0.0, settings.hook_s, True, "hook"))
         t = settings.hook_s
     rows = card_rows(finalist)
     if settings.name_card and rows and settings.name_card_s > 0:
-        cards.append(Card(tuple(rows), t, settings.name_card_s, False, "name"))
-        t += settings.name_card_s
+        # An announcement card lists several winners: give it time to be read.
+        dur = settings.name_card_s + (1.5 * (len(rows) - 2) if len(rows) > 2 else 0)
+        cards.append(Card(tuple(rows), t, dur, False, "name"))
+        t += dur
     score_start = total - settings.score_s
-    if settings.score_text and settings.score_s > 0 and score_start >= t + 2:
-        cards.append(Card((("chat", settings.score_text),), score_start, settings.score_s, True, "score"))
+    prompt = settings.score_text if finalist.kind == "performance" else settings.verdict_text
+    if prompt and settings.score_s > 0 and score_start >= t + 2:
+        cards.append(Card((("chat", prompt),), score_start, settings.score_s, True, "score"))
     return cards
 
 

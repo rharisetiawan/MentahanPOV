@@ -30,6 +30,7 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".mkv"}
 # Matches the slug rules below: lower-case words joined by single dashes.
 _SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 STATUSES = ("draft", "approved", "posted")
+KINDS = ("performance", "announcement")
 
 
 class CatalogError(ValueError):
@@ -59,6 +60,9 @@ class Finalist:
     tiktok: str = ""
     status: str = "draft"
     notes: str = ""
+    kind: str = "performance"  # or "announcement" (pengumuman juara)
+    hook: str = ""  # overrides settings.hook_text for this reel
+    card: tuple[str, ...] = ()  # announcement card lines, e.g. "Juara 1 · dr. X"
 
     @property
     def label(self) -> str:
@@ -76,7 +80,10 @@ class Finalist:
 
     def missing(self) -> list[str]:
         """Fields still empty that a finished reel needs."""
-        wanted = {"name": self.name, "city": self.city, "song": self.song, "artist": self.artist}
+        if self.kind == "announcement":
+            wanted = {"name": self.name, "card": " ".join(self.card)}
+        else:
+            wanted = {"name": self.name, "city": self.city, "song": self.song, "artist": self.artist}
         gaps = [key for key, value in wanted.items() if not value]
         if not self.segments:
             gaps.append("segments")
@@ -94,6 +101,7 @@ class Settings:
     name_card: bool = True
     name_card_s: float = 4.0
     score_text: str = "Skor kamu berapa? 1-10"
+    verdict_text: str = "Setuju sama juri?"  # the closing prompt on announcement reels
     score_s: float = 4.0
     progress_bar: bool = True
     logo_width_px: int = 216
@@ -147,7 +155,14 @@ def parse_catalog(text: str) -> Catalog:
         episode = row.get("episode")
         if episode is not None and (not isinstance(episode, int) or episode < 1):
             raise CatalogError(f"{slug}: episode harus angka bulat >= 1")
-        known = {"slug", "episode", "name", "city", "song", "artist", "segments", "instagram", "tiktok", "status", "notes"}
+        kind = row.get("kind", "performance")
+        if kind not in KINDS:
+            raise CatalogError(f"{slug}: kind '{kind}' harus salah satu dari {', '.join(KINDS)}")
+        card = row.get("card", [])
+        if not isinstance(card, list) or not all(isinstance(x, str) for x in card):
+            raise CatalogError(f"{slug}: card harus daftar teks")
+        known = {"slug", "episode", "name", "city", "song", "artist", "segments", "instagram",
+                 "tiktok", "status", "notes", "kind", "hook", "card"}
         unknown = set(row) - known
         if unknown:
             raise CatalogError(f"{slug}: kolom tidak dikenal {sorted(unknown)}")
@@ -164,6 +179,9 @@ def parse_catalog(text: str) -> Catalog:
                 tiktok=row.get("tiktok", "").lstrip("@"),
                 status=status,
                 notes=row.get("notes", ""),
+                kind=kind,
+                hook=row.get("hook", ""),
+                card=tuple(card),
             )
         )
     return Catalog(settings=settings, finalists=tuple(finalists))

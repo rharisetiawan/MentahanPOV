@@ -66,8 +66,12 @@ def compose(frame: Path, finalist: Finalist, settings: Settings, out: Path) -> P
     small_font = _load_brand_font(34)
     text_w = WIDTH - 2 * MARGIN_X
 
-    name_lines = _wrap(draw, finalist.name or finalist.slug, name_font, text_w)
-    detail = " · ".join(p for p in (finalist.city, finalist.song) if p)
+    # A visible placeholder rather than the slug, so a cover can't go out nameless unnoticed.
+    name_lines = _wrap(draw, finalist.name or "[nama finalis]", name_font, text_w)
+    if finalist.kind == "announcement":
+        detail = finalist.card[0] if finalist.card else ""
+    else:
+        detail = " · ".join(p for p in (finalist.city, finalist.song) if p)
     small = f"{settings.event} {settings.season} · fancam penonton"
     pill = series_tag(finalist, settings)
 

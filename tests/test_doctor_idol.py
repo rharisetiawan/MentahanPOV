@@ -192,6 +192,42 @@ class CoverTests(unittest.TestCase):
             self.assertTrue(png.exists())
 
 
+ANNOUNCEMENT = """
+[[finalist]]
+slug = "pengumuman-juara"
+kind = "announcement"
+name = "Pengumuman Juara"
+hook = "POV: kamu di kursi penonton saat juara diumumkan"
+card = ["Juara 1 · dr. A", "Juara 2 · dr. B", "Juara 3 · dr. C", "Most Loved Doctor · dr. D"]
+segments = [[90, 122], [159, 170]]
+"""
+
+
+class AnnouncementTests(unittest.TestCase):
+    def setUp(self) -> None:
+        catalog = cat.parse_catalog(ANNOUNCEMENT)
+        self.f = catalog.get("pengumuman-juara")
+        self.settings = catalog.settings
+
+    def test_own_hook_trophy_card_and_verdict_prompt(self) -> None:
+        cards = plan_cards(self.f, self.settings)
+        self.assertEqual(cards[0].rows[0][1], "POV: kamu di kursi penonton saat juara diumumkan")
+        self.assertEqual(cards[1].rows[0], ("trophy", "Juara 1 · dr. A"))
+        self.assertEqual(cards[1].dur, 4.0 + 1.5 * 2)  # four winners need longer on screen
+        self.assertEqual(cards[2].rows[0], ("chat", "Setuju sama juri?"))
+
+    def test_missing_and_bad_kind(self) -> None:
+        self.assertEqual(self.f.missing(), [])
+        with self.assertRaises(cat.CatalogError):
+            cat.parse_catalog('[[finalist]]\nslug = "a"\nkind = "final"\n')
+
+    def test_captions_list_winners(self) -> None:
+        text = build_captions(self.f, self.settings)
+        self.assertIn("🏆 Juara 2 · dr. B", text)
+        self.assertEqual(text.count(FANCAM_NOTE), 3)
+        self.assertNotIn("[nama finalis]", text)
+
+
 class CaptionTests(unittest.TestCase):
     def test_says_it_is_a_fancam(self) -> None:
         catalog = cat.parse_catalog(BASE)

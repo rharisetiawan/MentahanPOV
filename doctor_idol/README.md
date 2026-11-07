@@ -43,6 +43,26 @@ git worktree. Ganti lokasinya dengan env `DOCTOR_IDOL_MEDIA`.
 
 `captions <slug>` menulis ulang caption saja (mis. setelah akun IG diisi).
 
+### Rekaman 6 Nov 2026 (sudah ditata)
+
+- `raw/finalis-01.mp4` … `finalis-15.mp4` = 15 finalis sesuai **urutan tampil**;
+  nama file kamera asli (`VID_20261106_…`) tercatat di `notes`.
+- `raw/pengumuman-juara.mp4` = `VID_…213708` (pengumuman) + `VID_…214216`
+  (para juara memegang papan) digabung tanpa re-encode.
+- `extra/` = klip lain (jeda, komentar juri, MC sebelum pengumuman), file
+  asli pengumuman, dan salinan 480p lama Kartika.
+- Nama bertanda **"(?)"** berasal dari suara MC dan ejaannya belum pasti.
+  Tanda itu sengaja ikut tampil di video dan cover sampai dicek. Yang kosong
+  tampil sebagai "[nama finalis]" di cover dan caption.
+
+### Reel pengumuman juara
+
+Entri dengan `kind = "announcement"` memakai gaya yang sama, dengan isi lain:
+`hook` sendiri ("POV: kamu di kursi penonton saat juara diumumkan"), kartu
+`card` berisi daftar juara dengan ikon piala (tampil lebih lama sesuai
+jumlah baris), penutup `verdict_text` ("Setuju sama juri?"), dan caption
+yang mendaftar para juara.
+
 ## Ciri khas: seri "POV Kursi Penonton"
 
 Semua finalis memakai gaya yang sama supaya langsung dikenali sebagai

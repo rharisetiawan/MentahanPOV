@@ -1,15 +1,18 @@
 # Doctor Idol Competition Season IV — fancam MentahanPOV (unofficial).
+# Direkam 6 Nov 2026 (Jawa Pos Health & Lifestyle Expo 2026), 15 finalis.
 #
-# Satu blok [[finalist]] per finalis. Video mentahnya ada di
+# Satu blok [[finalist]] per video. Video mentahnya ada di
 # media/doctor-idol-s4/raw/<slug>.mp4 (folder utama, tidak masuk git).
 # Cara kerja lengkap: doctor_idol/README.md
 #
-#   slug       nama file video tanpa .mp4 (huruf kecil, angka, tanda -)
+#   slug       nama file video tanpa .mp4; finalis-NN = urutan tampil di panggung
 #   episode    nomor seri "POV Kursi Penonton #n" (urutan posting, bukan urutan tampil)
-#   name       persis seperti di layar panggung
+#   name       persis seperti di layar panggung. "(?)" = ejaan dari suara MC, BELUM PASTI:
+#              cek dulu sebelum posting (tanda ini ikut tampil di video supaya tidak lolos)
 #   segments   potongan [mulai, selesai] dalam detik, urut; disambung crossfade
 #   instagram  tanpa @; kosong = placeholder di caption
 #   status     draft | approved | posted
+#   kind       "announcement" untuk reel pengumuman juara (pakai hook + card sendiri)
 
 [settings]
 season = "Season IV"
@@ -22,20 +25,178 @@ hook_s = 2.5
 name_card = true        # kartu kiri: nama · kota, lagu · penyanyi (setelah hook)
 name_card_s = 4.0
 score_text = "Skor kamu berapa? 1-10"       # pill tengah di detik-detik terakhir
+verdict_text = "Setuju sama juri?"          # penutup reel pengumuman juara
 score_s = 4.0
 progress_bar = true     # garis ungu brand di tepi atas, terisi sampai video selesai
 logo_width_px = 216     # logo POV pojok kanan atas
 logo_opacity = 0.92
 target_clip_s = 30.0    # panjang usulan `suggest`
 
+# Potongan dipilih dari timeline tiap 5 detik: bagian close-up + klimaks lagu, menghindari
+# saat kamera berpaling. Nama kamera asli ada di notes.
+
 [[finalist]]
-slug = "kartika-widyasari"
+slug = "finalis-01"
+name = "dr. Verena Setia Budi (?)"
+city = ""
+song = ""
+artist = ""
+segments = [[90, 108], [242, 256]]
+status = "draft"
+notes = "VID_20261106_194447. JUARA 1 (papan 1st Winner). Nama dari suara MC saat pengumuman. Lagu berbahasa Inggris."
+
+[[finalist]]
+slug = "finalis-02"
+name = ""
+city = ""
+song = ""
+artist = ""
+segments = [[37, 67]]
+status = "draft"
+notes = "VID_20261106_195059. Laki-laki berkacamata, kaos marun. Lagu berbahasa Indonesia. Hampir semua shot lebar."
+
+[[finalist]]
+slug = "finalis-03"
+name = ""
+city = ""
+song = "Juwita Malam"
+artist = "Ismail Marzuki"
+segments = [[22, 38], [200, 217]]
+status = "draft"
+notes = "VID_20261106_195455. Laki-laki dasi kupu-kupu. Lagu dari MC: 'karya romantis Ismail Marzuki' + lirik 'Juwita malam'."
+
+[[finalist]]
+slug = "finalis-04"
+name = ""
+city = "Jember"
+song = "Sway (?)"
+artist = "The Pussycat Dolls"
+segments = [[5, 19], [63, 79]]
+status = "draft"
+notes = "VID_20261106_195923. MOST LOVED DOCTOR. Gaun ungu. Kata finalis: 'saya dari Jember, tapi juga dari Banyuwangi'; 'lagu dari Pussycat Dolls'."
+
+[[finalist]]
+slug = "finalis-05"
+name = ""
+city = ""
+song = ""
+artist = ""
+segments = [[10, 28], [66, 80]]
+status = "draft"
+notes = "VID_20261106_200336. Perempuan berhijab hijau."
+
+[[finalist]]
+slug = "finalis-06"
+name = ""
+city = ""
+song = ""
+artist = ""
+segments = [[8, 22], [150, 167]]
+status = "draft"
+notes = "VID_20261106_200907. Laki-laki, stand mic, lagu berbahasa Inggris."
+
+[[finalist]]
+slug = "finalis-07"
+name = "dr. Ni Ketut Putri Ayu Puspita Dewi"
+city = "Surabaya"
+song = ""
+artist = ""
+segments = [[52, 66], [152, 170]]
+status = "draft"
+notes = "VID_20261106_201505. Nama + kota terbaca di layar LED (detik 0-4). Lagu berbahasa Inggris."
+
+[[finalist]]
+slug = "finalis-08"
+name = ""
+city = ""
+song = ""
+artist = ""
+segments = [[46, 60], [122, 140]]
+status = "draft"
+notes = "VID_20261106_202213. Perempuan, rok rumbai krem."
+
+[[finalist]]
+slug = "finalis-09"
+name = "dr. Anggi (?)"
+city = ""
+song = "Lihatlah Lebih Dekat"
+artist = "Sherina"
+segments = [[32, 50], [182, 196]]
+status = "draft"
+notes = "VID_20261106_202710. LED detik 15 menampilkan 'dr. Anggi...' (terpotong). Lagu disebut sendiri oleh finalis."
+
+[[finalist]]
+slug = "finalis-10"
+name = ""
+city = ""
+song = ""
+artist = ""
+segments = [[120, 150]]
+status = "draft"
+notes = "VID_20261106_203320. Laki-laki berkacamata, stand mic. Close-up 2:00-2:40."
+
+[[finalist]]
+slug = "finalis-11"
+name = "drg. Revian (?)"
+city = ""
+song = ""
+artist = ""
+segments = [[2, 17], [165, 183]]
+status = "draft"
+notes = "VID_20261106_203922. JUARA 2 (papan 2nd Winner). Rambut pirang. MC: 'dokter gigi Revian ...' (nama belakang tidak jelas)."
+
+[[finalist]]
+slug = "finalis-12"
+name = "dr. Abdurrahman Omar (?)"
+city = ""
+song = ""
+artist = ""
+segments = [[36, 52], [220, 236]]
+status = "draft"
+notes = "VID_20261106_204356 (rekaman 4K). JUARA 3 (papan 3rd Winner). Berjenggot. Nama dari suara MC."
+
+[[finalist]]
+slug = "finalis-13"
+name = ""
+city = ""
+song = ""
+artist = ""
+segments = [[25, 41], [99, 114]]
+status = "draft"
+notes = "VID_20261106_204931. Laki-laki, sepatu putih."
+
+[[finalist]]
+slug = "finalis-14"
 episode = 1
 name = "dr. Kartika Widyasari"
 city = "Malang"
 song = "When I Look at You"
 artist = "Miley Cyrus"
 segments = [[198, 222.8], [268, 273.5]]
-instagram = ""
 status = "draft"
-notes = "Klip contoh pertama (7 Nov 2026). Sumber 480x854, di-upscale. Potongan 2 berhenti 273,5: setelah itu kamera berpaling ke mal."
+notes = "VID_20261106_205350 (versi asli 1080p; dulu kartika-widyasari dari salinan 480p). Potongan 2 berhenti 273,5: setelah itu kamera berpaling ke mal."
+
+[[finalist]]
+slug = "finalis-15"
+name = ""
+city = ""
+song = "Mengejar Matahari"
+artist = "Ari Lasso"
+segments = [[35, 55], [160, 172]]
+status = "draft"
+notes = "VID_20261106_205927. Finalis terakhir. Lagu disebut sendiri oleh finalis."
+
+[[finalist]]
+slug = "pengumuman-juara"
+kind = "announcement"
+name = "Pengumuman Juara"
+hook = "POV: kamu di kursi penonton saat juara diumumkan"
+card = [
+  "Juara 1 · dr. Verena Setia Budi (?)",
+  "Juara 2 · drg. Revian (?)",
+  "Juara 3 · dr. Abdurrahman Omar (?)",
+  "Most Loved Doctor · finalis dari Jember",
+]
+segments = [[90, 122], [159, 170]]
+status = "draft"
+notes = "VID_20261106_213708 + VID_20261106_214216 digabung (stream copy). Potongan 1: 'the winner goes to...' sampai nama Juara 1; potongan 2: para juara memegang papan."

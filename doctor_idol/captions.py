@@ -32,7 +32,42 @@ def _or(value: str, placeholder: str) -> str:
     return value or f"[{placeholder}]"
 
 
+def announcement_captions(finalist: Finalist, settings: Settings) -> str:
+    series = f"{settings.series} #{finalist.episode}" if finalist.episode else settings.series
+    winners = "\n".join(f"🏆 {line}" for line in finalist.card) or "[daftar juara]"
+    tags = "#POVKursiPenonton #MentahanPOV #DoctorIdol #DokterIndonesia #Fancam"
+    title = finalist.name or "Pengumuman juara"
+    instagram = "\n".join([
+        f"POV: kamu di kursi penonton waktu juara {settings.event} {settings.season} diumumkan 🏆",
+        series,
+        "",
+        winners,
+        "",
+        "Setuju sama juri? Siapa jagoanmu? Tulis di komentar 👇",
+        "",
+        FANCAM_NOTE,
+        "",
+        tags,
+    ])
+    shorts = "\n".join([
+        f"Judul: {series}: {title} {settings.event} {settings.season} 🏆 #Shorts #DoctorIdol",
+        "Deskripsi: " + "; ".join(finalist.card),
+        FANCAM_NOTE,
+    ])
+    tiktok_text = (
+        f"POV: kamu di kursi penonton waktu juara Doctor Idol diumumkan 🏆 Setuju sama juri? "
+        f"{FANCAM_NOTE} {tags} #fyp"
+    )
+    return (
+        "=== INSTAGRAM REELS / FACEBOOK ===\n" + instagram
+        + "\n\n=== YOUTUBE SHORTS ===\n" + shorts
+        + "\n\n=== TIKTOK ===\n" + tiktok_text + "\n"
+    )
+
+
 def build_captions(finalist: Finalist, settings: Settings) -> str:
+    if finalist.kind == "announcement":
+        return announcement_captions(finalist, settings)
     name = _or(finalist.name, "nama finalis")
     city = _or(finalist.city, "kota")
     song = _or(finalist.song, "judul lagu")
