@@ -5,6 +5,7 @@
 # Cara kerja lengkap: doctor_idol/README.md
 #
 #   slug       nama file video tanpa .mp4 (huruf kecil, angka, tanda -)
+#   episode    nomor seri "POV Kursi Penonton #n" (urutan posting, bukan urutan tampil)
 #   name       persis seperti di layar panggung
 #   segments   potongan [mulai, selesai] dalam detik, urut; disambung crossfade
 #   instagram  tanpa @; kosong = placeholder di caption
@@ -13,20 +14,28 @@
 [settings]
 season = "Season IV"
 event = "Doctor Idol Competition"
+series = "POV Kursi Penonton"   # nama seri: pill di cover, baris 2 caption, judul Shorts
 transition_s = 0.3      # crossfade antar potongan
-name_card = true        # kartu nama + lagu di awal video
+# Ciri khas MentahanPOV di setiap reel (kosongkan teks / false untuk mematikan):
+hook_text = "POV: kamu di kursi penonton"   # pill tengah, 0 s sampai hook_s
+hook_s = 2.5
+name_card = true        # kartu kiri: nama · kota, lagu · penyanyi (setelah hook)
 name_card_s = 4.0
+score_text = "Skor kamu berapa? 1-10"       # pill tengah di detik-detik terakhir
+score_s = 4.0
+progress_bar = true     # garis ungu brand di tepi atas, terisi sampai video selesai
 logo_width_px = 216     # logo POV pojok kanan atas
 logo_opacity = 0.92
 target_clip_s = 30.0    # panjang usulan `suggest`
 
 [[finalist]]
 slug = "kartika-widyasari"
+episode = 1
 name = "dr. Kartika Widyasari"
 city = "Malang"
 song = "When I Look at You"
 artist = "Miley Cyrus"
-segments = [[198, 222.8], [268, 279]]
+segments = [[198, 222.8], [268, 273.5]]
 instagram = ""
 status = "draft"
-notes = "Klip contoh pertama (7 Nov 2026). Sumber 480x854, di-upscale."
+notes = "Klip contoh pertama (7 Nov 2026). Sumber 480x854, di-upscale. Potongan 2 berhenti 273,5: setelah itu kamera berpaling ke mal."

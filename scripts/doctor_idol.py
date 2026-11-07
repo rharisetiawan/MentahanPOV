@@ -112,6 +112,7 @@ def cmd_captions(catalog: cat.Catalog, args) -> int:
 
 
 def cmd_render(catalog: cat.Catalog, args) -> int:
+    from doctor_idol.cover import make_cover
     from doctor_idol.render import render
 
     failed = 0
@@ -136,6 +137,7 @@ def cmd_render(catalog: cat.Catalog, args) -> int:
             print(f"x {f.slug}: {exc}")
             continue
         _write_caption(f, catalog)
+        make_cover(out, f, catalog.settings)
         gaps = f.missing()
         note = f"  (masih kurang: {', '.join(gaps)})" if gaps else ""
         print(f"✓ {f.slug}: {out}{note}")
@@ -149,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("scan", help="cari video baru di raw/")
     p.add_argument("--write", action="store_true", help="rename ke slug + tambah ke finalists.toml")
     for name, helptext in (("suggest", "usulkan potongan tersemarak"),
-                           ("render", "buat reels.mp4 + caption.txt"),
+                           ("render", "buat reels.mp4 + cover.jpg + caption.txt"),
                            ("captions", "tulis ulang caption.txt saja")):
         p = sub.add_parser(name, help=helptext)
         p.add_argument("slugs", nargs="*")

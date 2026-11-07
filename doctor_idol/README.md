@@ -15,7 +15,7 @@ di laptop (butuh `ffmpeg`/`ffprobe`), tidak di box.
 | Data finalis (nama, kota, lagu, potongan, status) | `doctor_idol/finalists.toml` | ya |
 | Kode | `doctor_idol/*.py`, `scripts/doctor_idol.py` | ya |
 | Video mentah | `media/doctor-idol-s4/raw/<slug>.mp4` | tidak |
-| Hasil | `media/doctor-idol-s4/reels/<slug>/reels.mp4` + `caption.txt` | tidak |
+| Hasil | `media/doctor-idol-s4/reels/<slug>/` : `reels.mp4`, `cover.jpg`, `caption.txt` | tidak |
 
 `media/` selalu di folder utama MentahanPOV, juga kalau skrip dijalankan dari
 git worktree. Ganti lokasinya dengan env `DOCTOR_IDOL_MEDIA`.
@@ -34,7 +34,7 @@ git worktree. Ganti lokasinya dengan env `DOCTOR_IDOL_MEDIA`.
    dan akhir 10 detik dilewati karena biasanya MC/tepuk tangan). Pilih satu,
    atau gabung dua potongan (`[[198, 222.8], [268, 279]]`). Tetap cek pakai
    telinga: tepuk tangan juga keras.
-5. **`python scripts/doctor_idol.py render --all`** membuat `reels.mp4` dan
+5. **`python scripts/doctor_idol.py render --all`** membuat `reels.mp4`, `cover.jpg` dan
    `caption.txt` per finalis. Yang sudah ada dan lebih baru dari video +
    `finalists.toml` dilewati; `--force` untuk render ulang.
 6. **`python scripts/doctor_idol.py status`** menampilkan siapa yang belum
@@ -43,16 +43,31 @@ git worktree. Ganti lokasinya dengan env `DOCTOR_IDOL_MEDIA`.
 
 `captions <slug>` menulis ulang caption saja (mis. setelah akun IG diisi).
 
-## Gaya video (sama untuk semua finalis)
+## Ciri khas: seri "POV Kursi Penonton"
 
-- 1080×1920, 30 fps, H.264 + AAC, loudness -14 LUFS.
-- Potongan disambung crossfade 0,3 detik (`transition_s`).
-- Logo POV pojok kanan atas, 216 px, opasitas 92% + bayangan. Bukan di tengah
-  seperti pipeline street-POV karena tengah layar = penyanyi.
-- Kartu nama di kiri atas 4 detik pertama: "nama · kota" dan "lagu · penyanyi".
-- Rekaman yang tidak 9:16 diletakkan di atas versi blur dirinya, tidak dicrop.
+Semua finalis memakai gaya yang sama supaya langsung dikenali sebagai
+MentahanPOV di feed dan grid profil. Prinsipnya tetap *mentah*: tanpa
+color grading, filter, musik tambahan, atau subtitle lirik. Suara asli
+penonton dan tepuk tangan dibiarkan. Yang ditambahkan hanya bingkai brand.
 
-Semua angka ada di `[settings]` pada `finalists.toml`.
+| Detik | Elemen | Kenapa |
+|---|---|---|
+| 0 – 2,5 | Pill tengah 👁 **"POV: kamu di kursi penonton"** | Nama brand jadi kalimat pertama yang dibaca; format POV asli TikTok; sekaligus jujur bahwa ini rekaman penonton |
+| 2,5 – 6,5 | Kartu kiri: 📍 nama · kota, 🔊 lagu · penyanyi | Konteks tanpa harus baca caption; teks di layar ikut dibaca pencarian TikTok/IG |
+| 4 detik terakhir | Pill tengah 💬 **"Skor kamu berapa? 1-10"** | Komentar adalah sinyal ranking; skor mengundang orang berdebat |
+| sepanjang video | Garis ungu brand di tepi atas, terisi sampai selesai | Penanda visual seri + memperlihatkan sisa durasi (membantu ditonton sampai habis) |
+| sepanjang video | Logo POV kanan atas, 216 px, 92% + bayangan | Tengah layar = penyanyi, jadi logo tidak di tengah seperti street-POV |
+| cover | Frame dari reel + pill ungu **"POV KURSI PENONTON #n"**, nama besar, kota · lagu | Grid IG terbaca sebagai satu seri bernomor; teks di area 3:4 yang tampil di grid |
+
+Caption: baris pertama "POV: kamu di kursi penonton, dokter dari <kota> ini
+naik panggung", baris kedua nama seri + nomor, hashtag `#POVKursiPenonton
+#MentahanPOV`. Judul Shorts diawali "POV Kursi Penonton #n:".
+
+Teknis: 1080×1920, 30 fps, H.264 + AAC, -14 LUFS; potongan disambung
+crossfade 0,3 detik; rekaman yang tidak 9:16 diletakkan di atas versi blur
+dirinya, tidak dicrop. Semua teks dan durasi ada di `[settings]` pada
+`finalists.toml` (kosongkan teks / `false` untuk mematikan elemen).
+`episode` = nomor urut posting, bukan urutan tampil di panggung.
 
 ## Aturan karena ini unofficial
 

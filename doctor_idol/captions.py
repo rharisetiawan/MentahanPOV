@@ -23,7 +23,8 @@ def _city_tag(city: str) -> str:
 
 
 def _hashtags(finalist: Finalist, *, extra: tuple[str, ...] = ()) -> str:
-    tags = ["#DoctorIdol", "#DoctorIdolSeason4", "#DokterIndonesia", _city_tag(finalist.city), *extra]
+    tags = ["#POVKursiPenonton", "#MentahanPOV", "#DoctorIdol", "#DokterIndonesia",
+            _city_tag(finalist.city), *extra]
     return " ".join(t for t in tags if t)
 
 
@@ -39,9 +40,11 @@ def build_captions(finalist: Finalist, settings: Settings) -> str:
     ig = f"@{finalist.instagram}" if finalist.instagram else "[akun IG finalis]"
     tiktok = f"@{finalist.tiktok}" if finalist.tiktok else ig
     who = f"{name} dari {city}, finalis {settings.event} {settings.season}"
+    series = f"{settings.series} #{finalist.episode}" if finalist.episode else settings.series
 
     instagram = "\n".join([
-        f"Sehari-hari jadi dokter, di panggung ini {name} jadi penyanyi 🎤✨",
+        f"POV: kamu di kursi penonton, dokter dari {city} ini naik panggung 🎤✨",
+        f"{series}",
         "",
         f"{who}, membawakan \"{song}\" ({artist}). {ig}",
         "",
@@ -49,19 +52,19 @@ def build_captions(finalist: Finalist, settings: Settings) -> str:
         "",
         FANCAM_NOTE,
         "",
-        _hashtags(finalist, extra=("#LiveSinging", "#Fancam")),
+        _hashtags(finalist, extra=("#Fancam",)),
         "",
         f"Collab: undang {ig} sebagai collaborator (opsional, setelah izin).",
     ])
     shorts = "\n".join([
-        f"Judul: Dokter dari {city} ini naik panggung, begini suaranya 🎤 #Shorts #DoctorIdol",
+        f"Judul: {series}: dokter dari {city} naik panggung, begini suaranya 🎤 #Shorts #DoctorIdol",
         f"Deskripsi: {who}, membawakan \"{song}\" ({artist}).",
         FANCAM_NOTE,
     ])
     tiktok_text = (
-        f"Dokter dari {city} ini naik panggung, begini suaranya 🎤 {tiktok} "
+        f"POV: kamu di kursi penonton, dokter dari {city} ini naik panggung 🎤 {tiktok} "
         f"Skornya berapa dari 10? {FANCAM_NOTE} "
-        + _hashtags(finalist, extra=("#Cover", "#Fancam", "#fyp"))
+        + _hashtags(finalist, extra=("#Fancam", "#fyp"))
     )
     return (
         "=== INSTAGRAM REELS / FACEBOOK ===\n" + instagram

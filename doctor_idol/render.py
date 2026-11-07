@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from doctor_idol.catalog import Finalist, Settings
@@ -26,6 +27,8 @@ from doctor_idol.catalog import Finalist, Settings
 WIDTH, HEIGHT = 1080, 1920
 FPS = 30
 LOGO_MARGIN = 40
+BAR_HEIGHT = 8
+BRAND_PURPLE = "0x8455E8"  # same purple as core/watermark.py's _BRAND_PURPLE
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LOGO_PATH = REPO_ROOT / "assets" / "watermark-logo.png"
 
@@ -61,14 +64,52 @@ def _fit(i: int, vertical: bool) -> str:
     )
 
 
+@dataclass(frozen=True)
+class Card:
+    """A transparent PNG pill shown from `start` for `dur` seconds."""
+
+    rows: tuple[tuple[str, str], ...]
+    start: float
+    dur: float
+    centred: bool = False
+    name: str = "card"
+
+
+def plan_cards(finalist: Finalist, settings: Settings) -> list[Card]:
+    """The MentahanPOV stage signature, in order of appearance:
+
+    1. hook (centre): "POV: kamu di kursi penonton". The brand name as the
+       first thing anyone reads, and an honest "this is a fan recording";
+    2. name card (left): name · city, song · artist;
+    3. score prompt (centre) in the last seconds: comments are a ranking
+       signal, and "skor berapa?" invites people to argue about it.
+
+    A card that doesn't fit the clip without overlapping another is dropped.
+    """
+    total = finalist.reel_length(settings.transition_s)
+    cards: list[Card] = []
+    t = 0.0
+    if settings.hook_text and settings.hook_s > 0:
+        cards.append(Card((("eye", settings.hook_text),), 0.0, settings.hook_s, True, "hook"))
+        t = settings.hook_s
+    rows = card_rows(finalist)
+    if settings.name_card and rows and settings.name_card_s > 0:
+        cards.append(Card(tuple(rows), t, settings.name_card_s, False, "name"))
+        t += settings.name_card_s
+    score_start = total - settings.score_s
+    if settings.score_text and settings.score_s > 0 and score_start >= t + 2:
+        cards.append(Card((("chat", settings.score_text),), score_start, settings.score_s, True, "score"))
+    return cards
+
+
 def build_filter(
     finalist: Finalist,
     settings: Settings,
     *,
     vertical: bool,
-    has_card: bool,
+    cards: list[Card] = (),
 ) -> str:
-    """The -filter_complex graph. Inputs: one per segment, then the logo, then the card."""
+    """The -filter_complex graph. Inputs: one per segment, the logo, then one per card."""
     segs = finalist.segments
     n = len(segs)
     xf = settings.transition_s
@@ -107,15 +148,27 @@ def build_filter(
         f"[base][shadow]overlay=W-w-{m - 4}:{m + 5}[b1]",
         f"[b1][wm]overlay=W-w-{m}:{m}[marked]",
     ]
-    if has_card:
-        secs = settings.name_card_s
+    prev = "marked"
+    for j, card in enumerate(cards):
+        k = logo + 1 + j
+        fade_out = max(0.0, card.dur - 0.4)
+        x = "(W-w)/2" if card.centred else "round(W*0.05)"
         parts += [
-            f"[{logo + 1}:v]format=rgba,fade=t=in:st=0:d=0.4:alpha=1,"
-            f"fade=t=out:st={secs - 0.6:g}:d=0.6:alpha=1[card]",
-            "[marked][card]overlay=x=round(W*0.05):y=round(H*0.10):eof_action=pass[vout]",
+            f"[{k}:v]format=rgba,fade=t=in:st=0:d=0.3:alpha=1,"
+            f"fade=t=out:st={fade_out:g}:d=0.4:alpha=1,setpts=PTS+{card.start:.3f}/TB[c{j}]",
+            f"[{prev}][c{j}]overlay=x={x}:y=round(H*0.10):eof_action=pass[o{j}]",
+        ]
+        prev = f"o{j}"
+    if settings.progress_bar:
+        # Brand-purple bar filling the top edge over the clip: recognisable
+        # at a glance in the feed, and it shows how much is left to watch.
+        total = finalist.reel_length(xf)
+        parts += [
+            f"color=c={BRAND_PURPLE}:s={WIDTH}x{BAR_HEIGHT}:r={FPS}:d={total:.3f}[bar]",
+            f"[{prev}][bar]overlay=x=-w+w*t/{total:.3f}:y=0:eof_action=pass[vout]",
         ]
     else:
-        parts.append("[marked]null[vout]")
+        parts.append(f"[{prev}]null[vout]")
     parts.append("[amain]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[aout]")
     return ";".join(parts)
 
@@ -127,7 +180,7 @@ def build_command(
     source: Path,
     output: Path,
     vertical: bool,
-    card_png: Path | None,
+    cards: list[tuple[Card, Path]] = (),
 ) -> list[str]:
     inputs: list[str] = []
     for seg in finalist.segments:
@@ -135,9 +188,9 @@ def build_command(
         # xfade/acrossfade need (feeding them from split/asplit misbehaves).
         inputs += ["-ss", f"{seg.start:g}", "-t", f"{seg.length:g}", "-i", str(source)]
     inputs += ["-i", str(LOGO_PATH)]
-    if card_png:
-        inputs += ["-loop", "1", "-t", f"{settings.name_card_s:g}", "-i", str(card_png)]
-    graph = build_filter(finalist, settings, vertical=vertical, has_card=card_png is not None)
+    for card, png in cards:
+        inputs += ["-loop", "1", "-t", f"{card.dur:g}", "-i", str(png)]
+    graph = build_filter(finalist, settings, vertical=vertical, cards=[c for c, _ in cards])
     return [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         *inputs,
@@ -178,16 +231,18 @@ def render(
         raise ValueError(f"{finalist.slug}: belum ada segments di finalists.toml")
     out_dir.mkdir(parents=True, exist_ok=True)
     output = out_dir / "reels.mp4"
-    card_png = None
-    rows = card_rows(finalist)
-    if settings.name_card and rows:
-        from core.watermark import render_overlay_card
+    from core.watermark import render_overlay_card
 
-        card_png = render_overlay_card(rows, video_size=(WIDTH, HEIGHT), path=out_dir / "card.png")
+    cards = []
+    for card in plan_cards(finalist, settings):
+        png = render_overlay_card(
+            list(card.rows), video_size=(WIDTH, HEIGHT), path=out_dir / f"card-{card.name}.png"
+        )
+        cards.append((card, png))
     width, height = probe_size(source)
     cmd = build_command(
         finalist, settings, source=source, output=output,
-        vertical=is_vertical(width, height), card_png=card_png,
+        vertical=is_vertical(width, height), cards=cards,
     )
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if proc.returncode != 0:

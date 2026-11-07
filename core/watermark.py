@@ -181,7 +181,37 @@ def _draw_search(draw, cx: float, cy: float, size: float, fg, bg) -> None:
     draw.ellipse((hx - end, hy - end, hx + end, hy + end), fill=fg)
 
 
-_ICONS = {"pin": _draw_pin, "speaker": _draw_speaker, "search": _draw_search}
+def _draw_eye(draw, cx: float, cy: float, size: float, fg, bg) -> None:
+    """An eye: the "POV" in POV: kamu di kursi penonton."""
+    w, h = size * 0.5, size * 0.3
+    draw.chord((cx - w, cy - h * 1.6, cx + w, cy + h * 1.6), start=20, end=160, fill=fg)
+    draw.chord((cx - w, cy - h * 1.6, cx + w, cy + h * 1.6), start=200, end=340, fill=fg)
+    draw.ellipse((cx - w * 0.62, cy - h, cx + w * 0.62, cy + h), fill=fg)
+    pupil = size * 0.17
+    draw.ellipse((cx - pupil, cy - pupil, cx + pupil, cy + pupil), fill=bg)
+
+
+def _draw_chat(draw, cx: float, cy: float, size: float, fg, bg) -> None:
+    """A speech bubble, for "tulis di komentar" prompts."""
+    s = size / 2
+    draw.rounded_rectangle((cx - s, cy - s * 0.75, cx + s, cy + s * 0.45), radius=s * 0.35, fill=fg)
+    draw.polygon(
+        [(cx - s * 0.45, cy + s * 0.3), (cx - s * 0.05, cy + s * 0.3), (cx - s * 0.6, cy + s * 0.95)],
+        fill=fg,
+    )
+    dot = max(1.5, size * 0.07)
+    for dx in (-0.45, 0.0, 0.45):
+        x = cx + s * dx
+        draw.ellipse((x - dot, cy - s * 0.15 - dot, x + dot, cy - s * 0.15 + dot), fill=bg)
+
+
+_ICONS = {
+    "pin": _draw_pin,
+    "speaker": _draw_speaker,
+    "search": _draw_search,
+    "eye": _draw_eye,
+    "chat": _draw_chat,
+}
 
 
 def render_overlay_card(

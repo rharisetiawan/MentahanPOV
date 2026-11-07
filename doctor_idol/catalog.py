@@ -49,6 +49,7 @@ class Segment:
 @dataclass(frozen=True)
 class Finalist:
     slug: str
+    episode: int | None = None  # "POV Kursi Penonton #<episode>": posting order, not stage order
     name: str = ""
     city: str = ""
     song: str = ""
@@ -68,6 +69,11 @@ class Finalist:
     def clip_length(self) -> float:
         return sum(s.length for s in self.segments)
 
+    def reel_length(self, transition_s: float) -> float:
+        """Length after the crossfades, which overlap neighbouring segments."""
+        overlaps = max(0, len(self.segments) - 1) if transition_s > 0 else 0
+        return self.clip_length - overlaps * transition_s
+
     def missing(self) -> list[str]:
         """Fields still empty that a finished reel needs."""
         wanted = {"name": self.name, "city": self.city, "song": self.song, "artist": self.artist}
@@ -81,9 +87,15 @@ class Finalist:
 class Settings:
     season: str = "Season IV"
     event: str = "Doctor Idol Competition"
+    series: str = "POV Kursi Penonton"
     transition_s: float = 0.3
+    hook_text: str = "POV: kamu di kursi penonton"
+    hook_s: float = 2.5
     name_card: bool = True
     name_card_s: float = 4.0
+    score_text: str = "Skor kamu berapa? 1-10"
+    score_s: float = 4.0
+    progress_bar: bool = True
     logo_width_px: int = 216
     logo_opacity: float = 0.92
     target_clip_s: float = 30.0
@@ -132,13 +144,17 @@ def parse_catalog(text: str) -> Catalog:
         status = row.get("status", "draft")
         if status not in STATUSES:
             raise CatalogError(f"{slug}: status '{status}' harus salah satu dari {', '.join(STATUSES)}")
-        known = {"slug", "name", "city", "song", "artist", "segments", "instagram", "tiktok", "status", "notes"}
+        episode = row.get("episode")
+        if episode is not None and (not isinstance(episode, int) or episode < 1):
+            raise CatalogError(f"{slug}: episode harus angka bulat >= 1")
+        known = {"slug", "episode", "name", "city", "song", "artist", "segments", "instagram", "tiktok", "status", "notes"}
         unknown = set(row) - known
         if unknown:
             raise CatalogError(f"{slug}: kolom tidak dikenal {sorted(unknown)}")
         finalists.append(
             Finalist(
                 slug=slug,
+                episode=episode,
                 name=row.get("name", ""),
                 city=row.get("city", ""),
                 song=row.get("song", ""),
@@ -221,6 +237,7 @@ def stub_entry(slug: str) -> str:
     return (
         "\n[[finalist]]\n"
         f'slug = "{slug}"\n'
+        "# episode = 2   # nomor urut posting seri POV Kursi Penonton\n"
         'name = ""        # persis seperti di layar panggung, mis. "dr. Kartika Widyasari"\n'
         'city = ""\n'
         'song = ""\n'
