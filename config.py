@@ -398,6 +398,16 @@ class Config:
     admin_dashboard_url: str = field(
         default_factory=lambda: _env("ADMIN_DASHBOARD_URL")
     )
+    # Optional Sign in with Google for admin.py (admin/google_login.py): off
+    # unless all four are set, and only the listed addresses get in.
+    admin_google_client_id: str = field(
+        default_factory=lambda: _env("ADMIN_GOOGLE_CLIENT_ID")
+    )
+    admin_google_client_secret: str = field(
+        default_factory=lambda: _env("ADMIN_GOOGLE_CLIENT_SECRET")
+    )
+    admin_google_emails: str = field(default_factory=lambda: _env("ADMIN_GOOGLE_EMAILS"))
+    admin_public_url: str = field(default_factory=lambda: _env("ADMIN_PUBLIC_URL"))
 
 
 config = Config()

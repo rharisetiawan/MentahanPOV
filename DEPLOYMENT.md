@@ -620,6 +620,26 @@ can rewrite every credential the pipeline uses. Requires a
 (it's a code change to `telegram_bot.py`, baked into the image like
 everything else that isn't bind-mounted).
 
+### Sign in with Google
+
+Optional, on top of the password (which keeps working, so a Google outage can't
+lock you out). Off unless all four `ADMIN_*` values are set; only the addresses in
+`ADMIN_GOOGLE_EMAILS` get in. Google refuses plain IP addresses as redirect URIs,
+so the dashboard needs an HTTPS name. `tailscale serve` provides one that stays
+private to the tailnet (this is not Funnel):
+
+```bash
+tailscale serve --bg 8091   # https://<box>.<tailnet>.ts.net -> localhost:8091
+```
+
+1. `.env`: `ADMIN_PUBLIC_URL=https://<box>.<tailnet>.ts.net` and
+   `ADMIN_GOOGLE_EMAILS=you@example.com`.
+2. Google Cloud -> Credentials -> Create OAuth client ID -> **Web application**, with
+   the redirect URI `https://<box>.<tailnet>.ts.net/auth/google/callback`. While the
+   consent screen is in Testing, the address must also be listed as a test user.
+3. `python3 scripts/set_admin_google.py` asks for the client ID and secret (hidden),
+   checks the pair with Google, saves it, and restarts the dashboard.
+
 ## TikTok remote worker
 
 > **Archived 2026-10-21.** TikTok is parked in `archive/tiktok/` (see its

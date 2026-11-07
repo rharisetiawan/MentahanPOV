@@ -16,6 +16,13 @@
     <a href="{{ url_for('bot_page') }}" class="{{ 'active' if request.endpoint == 'bot_page' }}">Bot</a>
     <a href="{{ url_for('run_page') }}" class="{{ 'active' if request.endpoint == 'run_page' }}">Run</a>
   </nav>
+  {% if session.get('google_email') %}
+  <form class="signout" method="post" action="{{ url_for('logout') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <span>{{ session['google_email'] }}</span>
+    <button type="submit">Keluar</button>
+  </form>
+  {% endif %}
 </header>
 <main>
   {% with messages = get_flashed_messages(with_categories=true) %}

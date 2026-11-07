@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Masuk · MentahanPOV Admin</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<main class="login">
+  <div class="brand">Mentahan<span>POV</span> · Admin</div>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+  <a class="login-google" href="{{ url_for('login_google') }}">Masuk dengan Google</a>
+  <a class="login-password" href="{{ url_for('login_password') }}">Pakai username &amp; password</a>
+</main>
+</body>
+</html>

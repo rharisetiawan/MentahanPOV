@@ -176,3 +176,9 @@ pre.log {
 .section-title { margin-top: 2rem; margin-bottom: 0.5rem; color: var(--muted); text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.06em; }
 .actions { display: flex; gap: 0.6rem; margin-top: 1rem; }
 .login-box { max-width: 340px; margin: 4rem auto; }
+
+.signout { margin-left: auto; display: flex; align-items: center; gap: 0.6rem; color: var(--muted); }
+.login { max-width: 22rem; margin: 18vh auto; display: flex; flex-direction: column; gap: 0.9rem; text-align: center; }
+.login .brand { font-size: 1.3rem; margin-bottom: 0.6rem; }
+.login-google { display: block; padding: 0.7rem 1rem; border-radius: 0.5rem; background: var(--accent); color: #fff; text-decoration: none; font-weight: 600; }
+.login-password { color: var(--muted); font-size: 0.9rem; }

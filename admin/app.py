@@ -5,7 +5,9 @@ runs as a separate host process instead of living inside the read-only
 
 Auth reuses the exact same HTTP Basic Auth pattern as `dashboard.py`
 (DASHBOARD_USER/DASHBOARD_PASSWORD from config.py) rather than inventing
-a second credential to manage.
+a second credential to manage. Sign in with Google is an optional, friendlier
+way in on top of it (admin/google_login.py); the password keeps working, so a
+Google outage can't lock anyone out.
 
 Routes:
     /config        — edit every .env value via a schema-driven form
@@ -32,6 +34,7 @@ from flask import (
     redirect,
     render_template,
     request,
+    session,
     url_for,
 )
 from flask_wtf import CSRFProtect
@@ -40,7 +43,7 @@ from werkzeug.utils import secure_filename
 from config import config as pipeline_config
 from core.authutil import safe_equal
 
-from . import creds, env_schema, env_store, jobs
+from . import creds, env_schema, env_store, google_login, jobs
 
 log = logging.getLogger("mentahanpov.admin")
 
@@ -77,28 +80,104 @@ def create_app() -> Flask:
     # threaded process (see admin.py's app.run(...)), not a multi-worker
     # deployment, so a stable/persisted key isn't needed.
     app.secret_key = secrets.token_hex(32)
+    # Lax, not Strict: Google's redirect back to the callback is a cross-site
+    # top-level GET, and must still carry the cookie holding the login state.
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     CSRFProtect(app)
+
+    def password_ok() -> bool:
+        auth = request.authorization
+        return bool(
+            auth
+            and safe_equal(auth.username, pipeline_config.dashboard_user)
+            and safe_equal(auth.password, pipeline_config.dashboard_password)
+        )
+
+    def password_challenge() -> Response:
+        return Response(
+            "Login required.",
+            401,
+            {"WWW-Authenticate": 'Basic realm="MentahanPOV Admin"'},
+        )
+
+    def google_session_ok() -> bool:
+        # Re-checked per request, so removing an address from
+        # ADMIN_GOOGLE_EMAILS takes effect with the next restart at the latest.
+        email = session.get("google_email")
+        return bool(email) and email in google_login.allowed_emails(
+            pipeline_config.admin_google_emails
+        )
 
     def require_auth(view):
         @wraps(view)
         def wrapped(*args, **kwargs):
-            auth = request.authorization
             if not pipeline_config.dashboard_password:
                 log.warning("[admin] DASHBOARD_PASSWORD is empty — refusing to serve")
                 return Response("Admin dashboard misconfigured: DASHBOARD_PASSWORD is empty.", 500)
-            if (
-                not auth
-                or not safe_equal(auth.username, pipeline_config.dashboard_user)
-                or not safe_equal(auth.password, pipeline_config.dashboard_password)
+            if not password_ok() and not (
+                google_login.is_enabled(pipeline_config) and google_session_ok()
             ):
-                return Response(
-                    "Login required.",
-                    401,
-                    {"WWW-Authenticate": 'Basic realm="MentahanPOV Admin"'},
-                )
+                if google_login.is_enabled(pipeline_config):
+                    return redirect(url_for("login_page"))
+                return password_challenge()
             return view(*args, **kwargs)
 
         return wrapped
+
+    # ---- sign in with Google -----------------------------------------------
+
+    @app.route("/login")
+    def login_page():
+        if not google_login.is_enabled(pipeline_config):
+            return redirect(url_for("index"))
+        return render_template("login.html")
+
+    @app.route("/login/password")
+    def login_password():
+        """The way in when Google is unavailable: the browser's password
+        prompt, whose answer it then resends on every later request."""
+        if not password_ok():
+            return password_challenge()
+        return redirect(url_for("index"))
+
+    @app.route("/login/google")
+    def login_google():
+        if not google_login.is_enabled(pipeline_config):
+            return redirect(url_for("index"))
+        url, pending = google_login.begin(pipeline_config)
+        session["google_pending"] = pending
+        return redirect(url)
+
+    @app.route(google_login.CALLBACK_PATH)
+    def login_google_callback():
+        if not google_login.is_enabled(pipeline_config):
+            return redirect(url_for("index"))
+        pending = session.pop("google_pending", None) or {}
+        try:
+            if request.args.get("error"):
+                raise google_login.LoginError("Login Google dibatalkan.")
+            if not safe_equal(request.args.get("state"), pending.get("state")):
+                raise google_login.LoginError("Sesi login tidak cocok, coba masuk lagi.")
+            claims = google_login.exchange_code(
+                request.args.get("code", ""), pending.get("verifier", ""), pipeline_config
+            )
+            email = google_login.verified_email(
+                claims, pipeline_config, pending.get("nonce", "")
+            )
+        except google_login.LoginError as exc:
+            log.warning("[admin] Google login refused: %s", exc)
+            flash(str(exc), "err")
+            return redirect(url_for("login_page"))
+        # A new session on login, so nothing from before it carries over.
+        session.clear()
+        session["google_email"] = email
+        log.info("[admin] signed in with Google: %s", email)
+        return redirect(url_for("index"))
+
+    @app.route("/logout", methods=["POST"])
+    def logout():
+        session.clear()
+        return redirect(url_for("login_page"))
 
     # ---- config -----------------------------------------------------------
 
