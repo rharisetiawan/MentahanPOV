@@ -566,7 +566,7 @@ container — both worse than just running a second small process. So
 ```bash
 cd /www/apps/mentahanpov
 python3 -m venv .venv-admin
-.venv-admin/bin/pip install flask python-dotenv
+.venv-admin/bin/pip install flask flask-wtf python-dotenv
 ```
 
 Then as a systemd unit (`/etc/systemd/system/mentahanpov-admin.service`):
