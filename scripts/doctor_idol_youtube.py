@@ -33,6 +33,8 @@ if hasattr(sys.stdout, "reconfigure"):
 from doctor_idol import catalog as cat  # noqa: E402
 
 WIB = dt.timezone(dt.timedelta(hours=7))
+# (reel and Short, full version), away from the bot's slots at 7, 12 and 19.
+DAILY_SLOTS = ((9, 11), (15, 17), (20, 22))
 QUEUE = cat.PACKAGE_DIR / "youtube_queue.json"
 PLAN = cat.PACKAGE_DIR / "yt_plan.json"
 BOX_DIR = "root@100.97.108.67:/www/apps/mentahanpov/state/doctor_idol/"
@@ -65,21 +67,29 @@ def short_meta(text: str) -> tuple[str, str]:
     return title.removeprefix("Judul: ").strip(), description.strip()
 
 
+def slot_times(start: dt.date, index: int) -> tuple[dt.datetime, dt.datetime]:
+    """Three a day while the event is fresh: (reel + Short time, full version time)."""
+    day, slot = divmod(index, len(DAILY_SLOTS))
+    date = start + dt.timedelta(days=day)
+    short_hour, full_hour = DAILY_SLOTS[slot]
+    return dt.datetime.combine(date, dt.time(short_hour), WIB), dt.datetime.combine(date, dt.time(full_hour), WIB)
+
+
 def plan(catalog: cat.Catalog, start: dt.date) -> list[dict]:
     """Every upload in posting order. Episodeless (announcement) goes first."""
     ordered = sorted(catalog.finalists, key=lambda f: f.episode or 0)
     root = cat.media_root()
     items = []
-    for day, f in enumerate(ordered):
-        date = start + dt.timedelta(days=day)
+    for index, f in enumerate(ordered):
+        short_at, full_at = slot_times(start, index)
         reel = cat.reels_dir(f.slug, root)
         long_dir = root / "youtube" / f.slug
         title, desc = short_meta((reel / "caption.txt").read_text(encoding="utf-8"))
         items.append({"key": f"{f.slug}:short", "video": reel / "reels.mp4", "thumb": None, "title": title,
-                      "description": desc, "at": dt.datetime.combine(date, dt.time(10), WIB)})
+                      "description": desc, "at": short_at})
         title, desc = full_meta((long_dir / "youtube.txt").read_text(encoding="utf-8"))
         items.append({"key": f"{f.slug}:full", "video": long_dir / "video.mp4", "thumb": long_dir / "thumbnail.jpg",
-                      "title": title, "description": desc, "at": dt.datetime.combine(date, dt.time(21), WIB)})
+                      "title": title, "description": desc, "at": full_at})
     return items
 
 

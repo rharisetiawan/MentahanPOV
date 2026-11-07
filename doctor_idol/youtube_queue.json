@@ -2,52 +2,94 @@
  "_start": "2026-11-09",
  "finalis-01:full": {
   "id": "gb5FOeFjoOk",
-  "publishAt": "2026-11-13T12:00:00Z",
-  "thumbnail": "HTTP 403: {\n  \"error\": {\n    \"code\": 403,\n    \"message\": \"The authenticated user doesn't have permissions to upload and set custom video thumbnails.\",\n    \"errors\": [\n   "
+  "publishAt": "2026-11-09T10:00:00Z",
+  "thumbnail": "ok"
  },
  "finalis-01:short": {
   "id": "jbqLhSQFnis",
-  "publishAt": "2026-11-13T05:00:00Z",
+  "publishAt": "2026-11-09T08:00:00Z",
   "thumbnail": "-"
  },
  "finalis-04:full": {
   "id": "Xf9KC7_M3KE",
-  "publishAt": "2026-11-11T12:00:00Z",
-  "thumbnail": "HTTP 403: {\n  \"error\": {\n    \"code\": 403,\n    \"message\": \"The authenticated user doesn't have permissions to upload and set custom video thumbnails.\",\n    \"errors\": [\n   "
+  "publishAt": "2026-11-08T15:00:00Z",
+  "thumbnail": "ok"
  },
  "finalis-04:short": {
   "id": "ObC5o6rxOos",
-  "publishAt": "2026-11-11T05:00:00Z",
+  "publishAt": "2026-11-08T13:00:00Z",
   "thumbnail": "-"
+ },
+ "finalis-07:short": {
+  "id": "2yTAz45gcsw",
+  "publishAt": "2026-11-10T13:00:00Z",
+  "thumbnail": "-",
+  "uploaded_at": "2026-11-07T18:24:34.318120+00:00"
+ },
+ "finalis-08:full": {
+  "id": "oCVmUZYJqik",
+  "publishAt": "2026-11-10T10:00:00Z",
+  "thumbnail": "ok",
+  "uploaded_at": "2026-11-07T18:24:01.800016+00:00"
+ },
+ "finalis-08:short": {
+  "id": "XnOdVMCI6g4",
+  "publishAt": "2026-11-10T08:00:00Z",
+  "thumbnail": "-",
+  "uploaded_at": "2026-11-07T18:22:03.953642+00:00"
+ },
+ "finalis-11:full": {
+  "id": "ZZdWficTQzo",
+  "publishAt": "2026-11-09T15:00:00Z",
+  "thumbnail": "ok",
+  "uploaded_at": "2026-11-07T18:18:59.033344+00:00"
+ },
+ "finalis-11:short": {
+  "id": "UK-jOBcEESA",
+  "publishAt": "2026-11-09T13:00:00Z",
+  "thumbnail": "-",
+  "uploaded_at": "2026-11-07T18:17:32.386823+00:00"
+ },
+ "finalis-12:full": {
+  "id": "2IKKG0EVwiM",
+  "publishAt": "2026-11-10T04:00:00Z",
+  "thumbnail": "ok",
+  "uploaded_at": "2026-11-07T18:21:23.312370+00:00"
+ },
+ "finalis-12:short": {
+  "id": "1HKCukFFEz8",
+  "publishAt": "2026-11-10T02:00:00Z",
+  "thumbnail": "-",
+  "uploaded_at": "2026-11-07T18:19:36.109689+00:00"
  },
  "finalis-14:full": {
   "id": "vPuRapawcls",
-  "publishAt": "2026-11-10T12:00:00Z",
-  "thumbnail": "HTTP 403: {\n  \"error\": {\n    \"code\": 403,\n    \"message\": \"The authenticated user doesn't have permissions to upload and set custom video thumbnails.\",\n    \"errors\": [\n   "
+  "publishAt": "2026-11-08T10:00:00Z",
+  "thumbnail": "ok"
  },
  "finalis-14:short": {
   "id": "n-SDmqBu6oA",
-  "publishAt": "2026-11-10T05:00:00Z",
+  "publishAt": "2026-11-08T08:00:00Z",
   "thumbnail": "-"
  },
  "finalis-15:full": {
   "id": "qCQis6uERrE",
-  "publishAt": "2026-11-12T12:00:00Z",
-  "thumbnail": "HTTP 403: {\n  \"error\": {\n    \"code\": 403,\n    \"message\": \"The authenticated user doesn't have permissions to upload and set custom video thumbnails.\",\n    \"errors\": [\n   "
+  "publishAt": "2026-11-09T04:00:00Z",
+  "thumbnail": "ok"
  },
  "finalis-15:short": {
   "id": "VgIwQTodsok",
-  "publishAt": "2026-11-12T05:00:00Z",
+  "publishAt": "2026-11-09T02:00:00Z",
   "thumbnail": "-"
  },
  "pengumuman-juara:full": {
   "id": "-eAIl1Wt5UY",
-  "publishAt": "2026-11-09T12:00:00Z",
-  "thumbnail": "HTTP 403: {\n  \"error\": {\n    \"code\": 403,\n    \"message\": \"The authenticated user doesn't have permissions to upload and set custom video thumbnails.\",\n    \"errors\": [\n   "
+  "publishAt": "2026-11-08T04:00:00Z",
+  "thumbnail": "ok"
  },
  "pengumuman-juara:short": {
   "id": "WxZGs8xzejs",
-  "publishAt": "2026-11-09T05:00:00Z",
+  "publishAt": "2026-11-08T02:00:00Z",
   "thumbnail": "-"
  }
 }

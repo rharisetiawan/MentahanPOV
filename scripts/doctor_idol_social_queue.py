@@ -1,6 +1,6 @@
 """Build queue.json for the box poster (scripts/doctor_idol_poster.py).
 
-One reel a day at 15:00 WIB, in series order, away from the bot's slots (7, 12, 19). Needs
+Three reels a day (09:00, 15:00, 20:00 WIB), away from the bot's slots (7, 12, 19). Needs
 doctor_idol/drive_manifest.json from scripts/doctor_idol_backup.py. The caption is
 the Instagram/Facebook section without its "Collab:" reminder, which is a note to us.
 
@@ -20,8 +20,8 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from doctor_idol import catalog as cat  # noqa: E402
 from doctor_idol.captions import FANCAM_NOTE, TAKEDOWN_NOTE  # noqa: E402
+from doctor_idol_youtube import slot_times  # noqa: E402
 
-WIB = dt.timezone(dt.timedelta(hours=7))
 HEADER = "=== INSTAGRAM REELS / FACEBOOK ===\n"
 
 
@@ -43,8 +43,8 @@ def main() -> int:
     start = dt.date.fromisoformat(args.start)
     queue = []
     finalists = sorted(cat.load_catalog().finalists, key=lambda x: x.episode or 0)
-    for day, f in enumerate(finalists):
-        at = dt.datetime.combine(start + dt.timedelta(days=day), dt.time(15), WIB)
+    for index, f in enumerate(finalists):
+        at = slot_times(start, index)[0]
         text = (cat.reels_dir(f.slug) / "caption.txt").read_text(encoding="utf-8")
         short = text.split("=== TIKTOK ===\n", 1)[1].strip()
         if len(short) > 500 or FANCAM_NOTE not in short or TAKEDOWN_NOTE not in short:
