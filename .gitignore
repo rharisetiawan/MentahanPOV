@@ -17,9 +17,14 @@ state/
 *.log
 downloads/
 incoming/
+# Big video files (Doctor Idol recordings + reels) stay out of git
+media/
 
 # Editor / OS
 .idea/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# graphify output (rebuild with: graphify update .)
+graphify-out/
