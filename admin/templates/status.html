@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Status — MentahanPOV Dashboard{% endblock %}
+{% block content %}
+<p class="muted">
+  Read-only, dari <code>{{ state_path }}</code>. Terbaru di atas.
+</p>
+{% if not entries %}
+<div class="card"><p class="muted">Belum ada histori posting.</p></div>
+{% endif %}
+{% for e in entries %}
+<div class="card">
+  <h2>{{ e.video_path.split("/")[-1].split("\\")[-1] if e.video_path else e.key }}</h2>
+  <p class="muted">{{ e.updated_at or "" }}</p>
+  {% if e.gdrive_url %}<p><a href="{{ e.gdrive_url }}" target="_blank" rel="noopener">Master di Drive ↗</a></p>{% endif %}
+  {% if e.gemini and e.gemini.file_name %}
+  <p class="muted">📁 {{ e.gemini.folder }} — {{ e.gemini.file_name }}</p>
+  {% endif %}
+  {% if e.platforms %}
+  <table>
+    <thead><tr><th>Platform</th><th>Status</th><th>Link / Error</th></tr></thead>
+    <tbody>
+      {% for name, info in e.platforms.items() %}
+      <tr>
+        <td>{{ name }}</td>
+        <td><span class="badge {{ 'ok' if info.status == 'ok' else 'error' }}">{{ info.status }}</span></td>
+        <td>
+          {% if info.status == "ok" and info.url %}
+            <a href="{{ info.url }}" target="_blank" rel="noopener">{{ info.url }}</a>
+          {% elif info.error %}
+            <span class="muted">{{ info.error }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endfor %}
+{% endblock %}
