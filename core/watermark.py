@@ -235,8 +235,14 @@ def render_overlay_card(
     video_size: tuple[int, int],
     path: Path,
     style: str | None = None,
+    max_width: int | None = None,
+    font_px: int | None = None,
 ) -> Path:
     """Stack of "icon + text" pills as one transparent PNG sized for the video.
+
+    With `max_width`, a card whose longest row would be wider is redrawn
+    with a proportionally smaller font, so a long name never runs off the
+    frame. `font_px` overrides the size picked from the video height.
 
     Styled after the MentahanPOV logo: rounded brand font, brand colours
     (CARD_STYLE), soft drop shadow. Icons are drawn as shapes, not emoji:
@@ -246,7 +252,7 @@ def render_overlay_card(
     from PIL import Image, ImageDraw, ImageFilter
 
     fill, fg = _CARD_STYLES.get(style or config.card_style, _CARD_STYLES["purple"])
-    font_px = max(16, round(min(video_size) * 0.036))
+    font_px = font_px or max(16, round(min(video_size) * 0.036))
     font = _load_brand_font(font_px)
     probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     pad_x, pad_y = round(font_px * 0.75), round(font_px * 0.42)
@@ -267,6 +273,12 @@ def render_overlay_card(
         pills.append((icon, text, left, width, height))
 
     total_w = max(p[3] for p in pills) + 2 * margin
+    if max_width and total_w > max_width and font_px > 16:
+        smaller = max(16, int(font_px * max_width / total_w))
+        return render_overlay_card(
+            rows, video_size=video_size, path=path, style=style,
+            max_width=max_width, font_px=smaller if smaller < font_px else font_px - 1,
+        )
     total_h = sum(p[4] for p in pills) + row_gap * (len(pills) - 1) + 2 * margin
     shadow = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
     card = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))

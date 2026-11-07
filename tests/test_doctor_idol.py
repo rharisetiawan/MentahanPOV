@@ -182,6 +182,21 @@ class CoverTests(unittest.TestCase):
             with Image.open(out) as img:
                 self.assertEqual(img.size, (1080, 1920))
 
+    def test_long_name_card_shrinks_to_fit(self) -> None:
+        from PIL import Image
+
+        from core.watermark import render_overlay_card
+
+        row = [("trophy", "Juara 3 · dr. Abdurachman Omar Baabdullah, Sp.PD")]
+        with tempfile.TemporaryDirectory() as tmp:
+            wide = render_overlay_card(row, video_size=(1080, 1920), path=Path(tmp) / "a.png")
+            fit = render_overlay_card(
+                row, video_size=(1080, 1920), path=Path(tmp) / "b.png", max_width=1002
+            )
+            with Image.open(wide) as a, Image.open(fit) as b:
+                self.assertGreater(a.width, 1002)
+                self.assertLessEqual(b.width, 1002)
+
     def test_new_icons_render(self) -> None:
         from core.watermark import render_overlay_card
 

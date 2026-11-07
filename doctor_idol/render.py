@@ -28,6 +28,8 @@ WIDTH, HEIGHT = 1080, 1920
 FPS = 30
 LOGO_MARGIN = 40
 BAR_HEIGHT = 8
+# Cards sit at x = 5% of the width: keep them inside the frame with a little air.
+CARD_MAX_WIDTH = WIDTH - round(WIDTH * 0.05) - 24
 BRAND_PURPLE = "0x8455E8"  # same purple as core/watermark.py's _BRAND_PURPLE
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LOGO_PATH = REPO_ROOT / "assets" / "watermark-logo.png"
@@ -242,7 +244,8 @@ def render(
     cards = []
     for card in plan_cards(finalist, settings):
         png = render_overlay_card(
-            list(card.rows), video_size=(WIDTH, HEIGHT), path=out_dir / f"card-{card.name}.png"
+            list(card.rows), video_size=(WIDTH, HEIGHT), path=out_dir / f"card-{card.name}.png",
+            max_width=CARD_MAX_WIDTH,
         )
         cards.append((card, png))
     width, height = probe_size(source)
