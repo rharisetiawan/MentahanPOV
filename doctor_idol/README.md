@@ -16,6 +16,7 @@ di laptop (butuh `ffmpeg`/`ffprobe`), tidak di box.
 | Kode | `doctor_idol/*.py`, `scripts/doctor_idol.py` | ya |
 | Video mentah | `media/doctor-idol-s4/raw/<slug>.mp4` | tidak |
 | Hasil | `media/doctor-idol-s4/reels/<slug>/` : `reels.mp4`, `cover.jpg`, `caption.txt` | tidak |
+| Versi YouTube | `media/doctor-idol-s4/youtube/<slug>/` : `video.mp4`, `thumbnail.jpg`, `youtube.txt` | tidak |
 
 `media/` selalu di folder utama MentahanPOV, juga kalau skrip dijalankan dari
 git worktree. Ganti lokasinya dengan env `DOCTOR_IDOL_MEDIA`.
@@ -83,18 +84,42 @@ Caption: baris pertama "POV: kamu di kursi penonton, dokter dari <kota> ini
 naik panggung", baris kedua nama seri + nomor, hashtag `#POVKursiPenonton
 #MentahanPOV`. Judul Shorts diawali "POV Kursi Penonton #n:".
 
+Semua caption memuat catatan fancam dan catatan keberatan ("DM Instagram
+@mentahanpov, akan kami hapus"). Kota/lagu/penyanyi yang kosong atau bertanda
+"(?)" tidak jadi placeholder: kalimatnya menyesuaikan dan muncul disclaimer
+"... belum kami pastikan". Rincian lain ditambahkan lewat kolom `unconfirmed`
+(mis. `["gelar"]`). Nama dan akun IG yang kosong tetap jadi `[placeholder]`.
+
 Teknis: 1080×1920, 30 fps, H.264 + AAC, -14 LUFS; potongan disambung
 crossfade 0,3 detik; rekaman yang tidak 9:16 diletakkan di atas versi blur
 dirinya, tidak dicrop. Semua teks dan durasi ada di `[settings]` pada
 `finalists.toml` (kosongkan teks / `false` untuk mematikan elemen).
 `episode` = nomor urut posting, bukan urutan tampil di panggung.
 
+## Versi panjang YouTube
+
+`python scripts/doctor_idol.py youtube --all` (atau `youtube <slug>`, `--force`
+untuk render ulang) membuat penampilan utuh, sekitar 5 menit render per video.
+Video yang lebih baru dari rekaman mentah dan `finalists.toml` dilewati, jadi
+perintah yang sama bisa diulang kalau terhenti.
+
+- 1920×1080, video vertikal utuh di tengah di atas versi blur dirinya. Sengaja
+  16:9: video vertikal sampai 3 menit akan diperlakukan YouTube sebagai Shorts.
+- Bingkai sama dengan reel (hook, kartu nama, logo, garis progres, ajakan skor),
+  tanpa musik atau subtitle lirik, -14 LUFS.
+- Kolom `full = [mulai, selesai]` memotong rekaman kalau ujungnya tidak layak
+  (dipakai finalis-07 dan finalis-14). Tanpa kolom ini, seluruh rekaman dipakai.
+- `youtube.txt`: judul + deskripsi untuk ditempel, lalu catatan upload yang
+  tidak ikut ditempel (monetisasi nonaktif, Unlisted dulu, cek Content ID).
+
 ## Aturan karena ini unofficial
 
 - Jangan pakai logo/nama Doctor Idol sebagai identitas akun, dan jangan
   mengaku penyelenggara. Hashtag `#DoctorIdol` boleh.
-- Minta izin finalis sebelum posting (DM cukup), lalu tag / undang collab.
-  Kalau finalis atau penyelenggara minta turun, turunkan.
+- User sudah meminta izin finalis saat merekam (6 Nov 2026) untuk reels pendek.
+  Tag / undang collab saat posting. Kalau finalis atau penyelenggara minta
+  turun, turunkan dari semua platform; pantau DM selama seri tayang.
+- Versi panjang (penampilan utuh) belum tentu tercakup izin itu: pastikan dulu.
 - Lagu cover berhak cipta: posting lewat Reels/TikTok (lisensi musik
   platform), jangan dimonetisasi di YouTube; Content ID bisa memblokir atau
   membisukan. Lirik tidak dijadikan subtitle.

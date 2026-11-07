@@ -7,7 +7,13 @@ import unittest
 from pathlib import Path
 
 from doctor_idol import catalog as cat
-from doctor_idol.captions import FANCAM_NOTE, build_captions
+from doctor_idol.captions import (
+    FANCAM_NOTE,
+    TAKEDOWN_NOTE,
+    build_captions,
+    build_youtube_text,
+    youtube_title,
+)
 from doctor_idol.cover import compose, cover_time, series_tag
 from doctor_idol.highlights import best_windows, parse_ebur128
 from doctor_idol.render import (
@@ -18,6 +24,9 @@ from doctor_idol.render import (
     is_vertical,
     plan_cards,
 )
+
+from doctor_idol.youtube import build_command as youtube_command
+from doctor_idol.youtube import long_cut
 
 BASE = """
 [settings]
@@ -240,7 +249,25 @@ class AnnouncementTests(unittest.TestCase):
         text = build_captions(self.f, self.settings)
         self.assertIn("🏆 Juara 2 · dr. B", text)
         self.assertEqual(text.count(FANCAM_NOTE), 3)
+        self.assertEqual(text.count(TAKEDOWN_NOTE), 3)
         self.assertNotIn("[nama finalis]", text)
+
+
+class YoutubeTests(unittest.TestCase):
+    def test_long_cut_defaults_to_whole_recording_and_clamps(self) -> None:
+        whole = cat.parse_catalog('[[finalist]]\nslug = "a"\n').get("a")
+        self.assertEqual(long_cut(whole, 200.0), cat.Segment(0.0, 200.0))
+        trimmed = cat.parse_catalog('[[finalist]]\nslug = "a"\nfull = [30, 500]\n').get("a")
+        self.assertEqual(long_cut(trimmed, 200.0), cat.Segment(30.0, 200.0))
+
+    def test_command_is_landscape_with_one_seek(self) -> None:
+        settings = cat.parse_catalog(BASE).settings
+        cmd = youtube_command(settings, source=Path("in.mp4"), output=Path("out.mp4"), cut=cat.Segment(30.0, 200.0))
+        self.assertEqual(cmd[cmd.index("-ss") + 1], "30")
+        self.assertEqual(cmd[cmd.index("-t") + 1], "170")
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        self.assertIn("crop=1920:1080", graph)
+        self.assertIn("loudnorm=I=-14", graph)
 
 
 class CaptionTests(unittest.TestCase):
@@ -248,6 +275,7 @@ class CaptionTests(unittest.TestCase):
         catalog = cat.parse_catalog(BASE)
         text = build_captions(catalog.get("kartika-widyasari"), catalog.settings)
         self.assertEqual(text.count(FANCAM_NOTE), 3)  # IG, Shorts, TikTok
+        self.assertEqual(text.count(TAKEDOWN_NOTE), 3)
         self.assertIn("#DokterMalang", text)
         self.assertIn("POV Kursi Penonton #1", text)
         self.assertIn("#POVKursiPenonton", text)
@@ -259,6 +287,54 @@ class CaptionTests(unittest.TestCase):
         self.assertIn("[nama finalis]", text)
         self.assertIn("@budi.dr", text)
         self.assertNotIn("@@", text)
+
+    def test_verified_finalist_has_no_disclaimer(self) -> None:
+        catalog = cat.parse_catalog(BASE)
+        text = build_captions(catalog.get("kartika-widyasari"), catalog.settings)
+        self.assertNotIn("belum kami pastikan", text)
+        self.assertIn('"When I Look at You" (Miley Cyrus)', text)
+
+    def test_missing_city_and_song_read_clean_with_disclaimer(self) -> None:
+        catalog = cat.parse_catalog(
+            '[[finalist]]\nslug = "a"\nname = "dr. Budi"\ninstagram = "budi"\n'
+        )
+        text = build_captions(catalog.get("a"), catalog.settings)
+        for leftover in ("[kota]", "[judul lagu]", "[penyanyi asli]", "membawakan", "dari ,"):
+            self.assertNotIn(leftover, text)
+        self.assertEqual(text.count("Kota dan judul lagu belum kami pastikan"), 3)
+        self.assertEqual(text.count(FANCAM_NOTE), 3)
+        self.assertIn("dokter ini naik panggung", text)
+
+    def test_uncertain_song_and_extra_detail_in_disclaimer(self) -> None:
+        catalog = cat.parse_catalog(
+            '[[finalist]]\nslug = "a"\nname = "B"\ncity = "Malang"\nsong = "Lagu (?)"\n'
+            'artist = "C"\nunconfirmed = ["gelar"]\n'
+        )
+        f = catalog.get("a")
+        self.assertEqual(f.uncertain(), ["judul lagu", "gelar"])
+        text = build_captions(f, catalog.settings)
+        self.assertIn('"Lagu (?)" (C)', text)
+        self.assertIn("Judul lagu dan gelar belum kami pastikan", text)
+
+    def test_youtube_text_keeps_the_notes_and_the_title_limit(self) -> None:
+        catalog = cat.parse_catalog(
+            BASE + '\n[[finalist]]\nslug = "panjang"\nname = "dr. Nama Yang Sangat Panjang Sekali Sampai '
+            'Melewati Batas Judul Youtube, Sp.PD"\nsong = "Judul Lagu Yang Juga Cukup Panjang"\n'
+        )
+        for f in catalog.finalists:
+            self.assertLessEqual(len(youtube_title(f, catalog.settings)), 100)
+            text = build_youtube_text(f, catalog.settings)
+            self.assertIn(FANCAM_NOTE, text)
+            self.assertIn(TAKEDOWN_NOTE, text)
+            self.assertIn("Monetisasi: nonaktif", text)
+        self.assertEqual(
+            youtube_title(catalog.get("kartika-widyasari"), catalog.settings),
+            "When I Look at You - dr. Kartika Widyasari | Doctor Idol Competition Season IV (Fancam)",
+        )
+
+    def test_unconfirmed_must_be_a_list(self) -> None:
+        with self.assertRaises(cat.CatalogError):
+            cat.parse_catalog('[[finalist]]\nslug = "a"\nunconfirmed = "gelar"\n')
 
 
 if __name__ == "__main__":

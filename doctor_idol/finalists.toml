@@ -12,7 +12,10 @@
 #              (tanda ini ikut tampil di video supaya tidak lolos)
 #   segments   potongan [mulai, selesai] dalam detik, urut; disambung crossfade
 #   instagram  tanpa @; kosong = placeholder di caption
+#   full       rentang versi YouTube [mulai, selesai]; kosong = seluruh rekaman
 #   status     draft | approved | posted
+#   unconfirmed  rincian lain yang belum pasti untuk disclaimer caption, mis. ["gelar"]
+#              (kota/lagu/penyanyi yang kosong atau "(?)" otomatis masuk disclaimer)
 #   kind       "announcement" untuk reel pengumuman juara (pakai hook + card sendiri)
 
 [settings]
@@ -38,146 +41,160 @@ target_clip_s = 30.0    # panjang usulan `suggest`
 
 [[finalist]]
 slug = "finalis-01"
+episode = 4
 name = "dr. Verina Setyabudhi, Sp.PD"
 city = "Malang"
-song = ""
-artist = ""
+song = "When You Believe"
+artist = "Whitney Houston & Mariah Carey"
 segments = [[90, 108], [242, 256]]
 instagram = "doktervee"
-status = "draft"
-notes = "VID_20261106_194447. Nama + kota dari halaman 'Pantau Doctor Idol'; JUARA 1 (papan 1st Winner)."
+status = "approved"
+notes = "VID_20261106_194447. Nama + kota dari halaman 'Pantau Doctor Idol'; JUARA 1 (papan 1st Winner). Lagu dari lirik live (Whisper, 7 Nov)."
 
 [[finalist]]
 slug = "finalis-02"
+episode = 10
 name = "dr. Ahmad Iqbal Romdloni"
 city = "Pasuruan"
-song = ""
-artist = ""
+song = "Jangan"
+artist = "Marion Jola ft. Rayi Putra"
 segments = [[37, 67]]
 instagram = "iqbalromdloni"
-status = "draft"
-notes = "VID_20261106_195059. MC memanggil 'Ahmad Iqbal Romdloni' di klip jeda VID_194924 tepat sebelum finalis ini naik."
+status = "approved"
+notes = "VID_20261106_195059. MC memanggil 'Ahmad Iqbal Romdloni' di klip jeda VID_194924 tepat sebelum finalis ini naik. Lagu dari lirik live + bagian rap, dicocokkan ke sumber web."
 
 [[finalist]]
 slug = "finalis-03"
+episode = 9
 name = "dr. Aldhi Wimandra"
-city = ""
+city = "Bondowoso"
 song = "Juwita Malam"
 artist = "Ismail Marzuki"
 segments = [[22, 38], [200, 217]]
 instagram = "aldhiwimandra"
-status = "draft"
-notes = "VID_20261106_195455. Dicocokkan dari wajah di reel IG-nya, dikonfirmasi user 7 Nov 2026. PPDS Psikiatri."
+status = "approved"
+notes = "VID_20261106_195455. Dicocokkan dari wajah di reel IG-nya, dikonfirmasi user 7 Nov 2026. PPDS Psikiatri. Data dikoreksi user 7 Nov 2026."
 
 [[finalist]]
 slug = "finalis-04"
+episode = 2
 name = "dr. Natasya Febrilia Yulianti"
 city = "Jember"
-song = "Sway (?)"
+song = "Sway"
 artist = "The Pussycat Dolls"
 segments = [[5, 19], [63, 79]]
 instagram = "natasyafebrilia"
-status = "draft"
-notes = "VID_20261106_195923. MOST LOVED DOCTOR. Satu-satunya finalis dari Jember di daftar."
+status = "approved"
+notes = "VID_20261106_195923. MOST LOVED DOCTOR. Satu-satunya finalis dari Jember di daftar. Lagu disebut sendiri oleh finalis di awal rekaman."
 
 [[finalist]]
 slug = "finalis-05"
+episode = 11
 name = "drg. Iga Tri Budiarti"
-city = ""
-song = ""
-artist = ""
+city = "Tuban"
+song = "Terlalu Cinta"
+artist = "Rossa"
 segments = [[10, 28], [66, 80]]
 instagram = "iga.tribudiarti"
-status = "draft"
-notes = "VID_20261106_200336. Dicocokkan dari wajah + hijab di reel IG-nya."
+status = "approved"
+notes = "VID_20261106_200336. Dicocokkan dari wajah + hijab di reel IG-nya. Lagu dari lirik live, dicocokkan ke sumber web. Data dikoreksi user 7 Nov 2026."
 
 [[finalist]]
 slug = "finalis-06"
+episode = 15
 name = "dr. Andre Saputra"
 city = "Sidoarjo"
-song = ""
-artist = ""
+song = "Ada Titik-Titik di Ujung Doa"
+artist = "Sal Priadi"
 segments = [[8, 22], [150, 167]]
 instagram = "andsput"
-status = "draft"
-notes = "VID_20261106_200907. Dicocokkan dari wajah di reel IG-nya."
+status = "approved"
+notes = "VID_20261106_200907. Dicocokkan dari wajah di reel IG-nya. Data dikoreksi user 7 Nov 2026."
 
 [[finalist]]
 slug = "finalis-07"
+episode = 8
 name = "dr. Ni Ketut Putri Ayu Puspita Dewi"
 city = "Surabaya"
-song = ""
-artist = ""
+song = "All I Ask"
+artist = "Adele"
 segments = [[52, 66], [152, 170]]
 instagram = "putriayupus"
-status = "draft"
-notes = "VID_20261106_201505. Nama + kota terbaca di layar LED."
+full = [0, 329]
+status = "approved"
+notes = "VID_20261106_201505. Nama + kota terbaca di layar LED. Lagu dari lirik live."
 
 [[finalist]]
 slug = "finalis-08"
+episode = 7
 name = "dr. Anre Hernadia Inas, Dipl. AAAM"
 city = "Kediri"
-song = ""
-artist = ""
+song = "Sang Dewi"
+artist = "Lyodra"
 segments = [[46, 60], [122, 140]]
 instagram = "hernadiaines"
-status = "draft"
-notes = "VID_20261106_202213. Dicocokkan dari wajah (poni) di reel IG-nya."
+status = "approved"
+notes = "VID_20261106_202213. Dicocokkan dari wajah (poni) di reel IG-nya. Data dikoreksi user 7 Nov 2026."
 
 [[finalist]]
 slug = "finalis-09"
+episode = 14
 name = "dr. Anggindita Diah Widihidayati"
 city = "Surabaya"
 song = "Lihatlah Lebih Dekat"
 artist = "Sherina"
 segments = [[32, 50], [182, 196]]
 instagram = "angginditadw"
-status = "draft"
+status = "approved"
 notes = "VID_20261106_202710. LED 'dr. Anggi...' + daftar Pantau Doctor Idol."
 
 [[finalist]]
 slug = "finalis-10"
+episode = 13
 name = "dr. Almer Deta Tarandha"
-city = ""
-song = ""
-artist = ""
+city = "Surabaya"
+song = "Tega"
+artist = "This Is Joy (?)"
 segments = [[120, 150]]
 instagram = "almerdt"
-status = "draft"
-notes = "VID_20261106_203320. Dicocokkan dari wajah (kacamata) di reel IG-nya."
+status = "approved"
+notes = "VID_20261106_203320. Dicocokkan dari wajah (kacamata) di reel IG-nya. Lagu orisinal finalis dan band-nya, disebut sendiri di detik 155-170; ejaan nama band belum pasti. Data dikoreksi user 7 Nov 2026."
 
 [[finalist]]
 slug = "finalis-11"
+episode = 5
 name = "drg. Revian Gigih Laksono, MPH"
 city = "Surabaya"
-song = ""
-artist = ""
+song = "From This Moment On"
+artist = "Shania Twain"
 segments = [[2, 17], [165, 183]]
 instagram = "revianglaks"
-status = "draft"
-notes = "VID_20261106_203922. JUARA 2 (papan 2nd Winner)."
+status = "approved"
+notes = "VID_20261106_203922. JUARA 2 (papan 2nd Winner). Lagu dari lirik live."
 
 [[finalist]]
 slug = "finalis-12"
+episode = 6
 name = "dr. Abdurachman Omar Baabdullah, Sp.PD"
 city = "Malang"
-song = ""
-artist = ""
+song = "Pesan Terakhir"
+artist = "Lyodra"
 segments = [[36, 52], [220, 236]]
 instagram = "abdurbaabdullah"
-status = "draft"
-notes = "VID_20261106_204356 (rekaman 4K). JUARA 3 (papan 3rd Winner)."
+status = "approved"
+notes = "VID_20261106_204356 (rekaman 4K). JUARA 3 (papan 3rd Winner). Data dikoreksi user 7 Nov 2026."
 
 [[finalist]]
 slug = "finalis-13"
-name = "Haris Rizky Minata"
-city = ""
-song = ""
-artist = ""
+episode = 12
+name = "dr. Haris Rizky Minata"
+city = "Jombang"
+song = "Makna Cinta"
+artist = "Rizky Febian"
 segments = [[25, 41], [99, 114]]
 instagram = "harisrizkymnt"
-status = "draft"
-notes = "VID_20261106_204931. Nama dari profil IG (gelar belum diketahui). Dicocokkan dari wajah di reel IG-nya."
+status = "approved"
+notes = "VID_20261106_204931. Nama dari profil IG (gelar belum diketahui). Dicocokkan dari wajah di reel IG-nya. MC memanggil 'Dr.' di akhir rekaman; gelar persis belum dipastikan. Data dikoreksi user 7 Nov 2026."
 
 [[finalist]]
 slug = "finalis-14"
@@ -188,18 +205,20 @@ song = "When I Look at You"
 artist = "Miley Cyrus"
 segments = [[198, 222.8], [268, 273.5]]
 instagram = "kartikawyd"
-status = "draft"
+full = [0, 276]
+status = "approved"
 notes = "VID_20261106_205350 (versi asli 1080p; dulu kartika-widyasari dari salinan 480p). Potongan 2 berhenti 273,5: setelah itu kamera berpaling ke mal."
 
 [[finalist]]
 slug = "finalis-15"
+episode = 3
 name = "dr. Dhita Budi Wibowo, Sp.An-TI"
 city = "Yogyakarta"
 song = "Mengejar Matahari"
 artist = "Ari Lasso"
 segments = [[35, 55], [160, 172]]
 instagram = "dhitabw"
-status = "draft"
+status = "approved"
 notes = "VID_20261106_205927. Dicocokkan dari wajah di reel IG-nya, dikonfirmasi user 7 Nov 2026. Finalis terakhir."
 
 [[finalist]]
@@ -214,5 +233,5 @@ card = [
   "Most Loved Doctor · dr. Natasya Febrilia Yulianti",
 ]
 segments = [[90, 122], [159, 170]]
-status = "draft"
+status = "approved"
 notes = "VID_20261106_213708 + VID_20261106_214216 digabung (stream copy). Potongan 1: 'the winner goes to...' sampai nama Juara 1; potongan 2: para juara memegang papan."

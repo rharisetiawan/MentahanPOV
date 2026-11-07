@@ -3,6 +3,17 @@
 Status per 7 Nov 2026. Dokumen ini cukup untuk melanjutkan tanpa riwayat
 percakapan sebelumnya. Detail cara pakai alat ada di `doctor_idol/README.md`.
 
+> **Pembaruan 8 Nov 2026 (mengalahkan bagian di bawah bila berbeda).**
+> Pekerjaan berlanjut di branch `claude/doctor-idol-s4-fancam-fdc89c`, worktree
+> `.claude/worktrees/doctor-idol-s4-fancam-fdc89c`; lihat `logs/2026-11-08.md`
+> untuk status terbaru. 16 reel dan 16 versi YouTube sudah jadi dan siap
+> diunggah manual oleh user. Versi YouTube ada di
+> `media/doctor-idol-s4/youtube/<slug>/`. Semua finalis `approved`, bernomor
+> episode, lagu dan kota lengkap. Satu keraguan tersisa: nama band finalis-10
+> "This Is Joy (?)", ditutup disclaimer caption. Lirik live bisa dibaca Whisper
+> kalau audio disaring ke rentang vokal (`highpass=180,lowpass=3800,dynaudnorm`)
+> tanpa VAD.
+
 ## Apa ini
 
 User (Hari, pemilik MentahanPOV) merekam live dari kursi penonton semua

@@ -63,6 +63,20 @@ class Finalist:
     kind: str = "performance"  # or "announcement" (pengumuman juara)
     hook: str = ""  # overrides settings.hook_text for this reel
     card: tuple[str, ...] = ()  # announcement card lines, e.g. "Juara 1 · dr. X"
+    unconfirmed: tuple[str, ...] = ()  # other unverified details for the disclaimer, e.g. "gelar"
+    full: Segment | None = None  # YouTube version's range; None = the whole recording
+
+    def uncertain(self) -> list[str]:
+        """What the caption's disclaimer must admit: empty or "(?)" details, plus `unconfirmed`."""
+        items: list[str] = []
+        if self.kind != "announcement":
+            if not self.city or "(?)" in self.city:
+                items.append("kota")
+            if not self.song or "(?)" in self.song:
+                items.append("judul lagu")
+            elif not self.artist or "(?)" in self.artist:
+                items.append("penyanyi asli")
+        return items + list(self.unconfirmed)
 
     @property
     def label(self) -> str:
@@ -161,8 +175,11 @@ def parse_catalog(text: str) -> Catalog:
         card = row.get("card", [])
         if not isinstance(card, list) or not all(isinstance(x, str) for x in card):
             raise CatalogError(f"{slug}: card harus daftar teks")
+        unconfirmed = row.get("unconfirmed", [])
+        if not isinstance(unconfirmed, list) or not all(isinstance(x, str) for x in unconfirmed):
+            raise CatalogError(f"{slug}: unconfirmed harus daftar teks")
         known = {"slug", "episode", "name", "city", "song", "artist", "segments", "instagram",
-                 "tiktok", "status", "notes", "kind", "hook", "card"}
+                 "tiktok", "status", "notes", "kind", "hook", "card", "unconfirmed", "full"}
         unknown = set(row) - known
         if unknown:
             raise CatalogError(f"{slug}: kolom tidak dikenal {sorted(unknown)}")
@@ -182,6 +199,8 @@ def parse_catalog(text: str) -> Catalog:
                 kind=kind,
                 hook=row.get("hook", ""),
                 card=tuple(card),
+                unconfirmed=tuple(unconfirmed),
+                full=_segment(row["full"], slug) if "full" in row else None,
             )
         )
     return Catalog(settings=settings, finalists=tuple(finalists))

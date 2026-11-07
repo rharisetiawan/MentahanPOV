@@ -34,6 +34,12 @@ def _pick(catalog: cat.Catalog, slugs: list[str], all_: bool) -> list[cat.Finali
     return [catalog.get(s) for s in slugs]
 
 
+def _empty_fields(f: cat.Finalist) -> set[str]:
+    """Disclaimer labels already reported by missing(), so status doesn't list them twice."""
+    labels = {"city": "kota", "song": "judul lagu", "artist": "penyanyi asli"}
+    return {labels[key] for key in f.missing() if key in labels}
+
+
 def cmd_status(catalog: cat.Catalog, args) -> int:
     root = cat.media_root()
     print(f"Media: {root}")
@@ -42,7 +48,8 @@ def cmd_status(catalog: cat.Catalog, args) -> int:
         raw = cat.raw_video(f.slug, root)
         reel = cat.reels_dir(f.slug, root) / "reels.mp4"
         clip = f"{f.clip_length:.0f}s" if f.segments else "-"
-        missing = ", ".join(f.missing()) or "-"
+        doubts = [f"{item} (?)" for item in f.uncertain() if item not in _empty_fields(f)]
+        missing = ", ".join(f.missing() + doubts) or "-"
         print(f"{f.slug:28} {'ya' if raw else 'TIDAK':4} {clip:>6} {'ya' if reel.exists() else '-':5} "
               f"{f.status:9} {missing}")
     extra = cat.unlisted_videos(catalog, root)
@@ -144,6 +151,35 @@ def cmd_render(catalog: cat.Catalog, args) -> int:
     return 1 if failed else 0
 
 
+def cmd_youtube(catalog: cat.Catalog, args) -> int:
+    from doctor_idol.captions import build_youtube_text
+    from doctor_idol.youtube import make_thumbnail, render_youtube
+
+    failed = 0
+    for f in _pick(catalog, args.slugs, args.all):
+        raw = cat.raw_video(f.slug)
+        if not raw:
+            print(f"- {f.slug}: lewati, video mentah tidak ada")
+            continue
+        out_dir = cat.media_root() / "youtube" / f.slug
+        video = out_dir / "video.mp4"
+        if video.exists() and not args.force and video.stat().st_mtime > max(
+            raw.stat().st_mtime, cat.CATALOG_PATH.stat().st_mtime
+        ):
+            print(f"= {f.slug}: sudah ada dan terbaru (pakai --force untuk render ulang)")
+            continue
+        try:
+            out = render_youtube(f, catalog.settings, source=raw, out_dir=out_dir)
+        except (RuntimeError, ValueError) as exc:
+            failed += 1
+            print(f"x {f.slug}: {exc}", flush=True)
+            continue
+        (out_dir / "youtube.txt").write_text(build_youtube_text(f, catalog.settings), encoding="utf-8")
+        make_thumbnail(out, f, catalog.settings)
+        print(f"✓ {f.slug}: {out}", flush=True)
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -152,6 +188,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--write", action="store_true", help="rename ke slug + tambah ke finalists.toml")
     for name, helptext in (("suggest", "usulkan potongan tersemarak"),
                            ("render", "buat reels.mp4 + cover.jpg + caption.txt"),
+                           ("youtube", "buat video.mp4 16:9 penampilan utuh + thumbnail + youtube.txt"),
                            ("captions", "tulis ulang caption.txt saja")):
         p = sub.add_parser(name, help=helptext)
         p.add_argument("slugs", nargs="*")
@@ -159,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
         if name == "suggest":
             p.add_argument("--length", type=float, help="panjang potongan (detik)")
             p.add_argument("--count", type=int, default=3)
-        if name == "render":
+        if name in ("render", "youtube"):
             p.add_argument("--force", action="store_true", help="render ulang walau sudah ada")
     args = parser.parse_args(argv)
     try:
@@ -168,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"finalists.toml: {exc}", file=sys.stderr)
         return 2
     handler = {"status": cmd_status, "scan": cmd_scan, "suggest": cmd_suggest,
-               "render": cmd_render, "captions": cmd_captions}[args.cmd]
+               "render": cmd_render, "youtube": cmd_youtube, "captions": cmd_captions}[args.cmd]
     try:
         return handler(catalog, args)
     except cat.CatalogError as exc:
