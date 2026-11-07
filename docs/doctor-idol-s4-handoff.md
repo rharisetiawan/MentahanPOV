@@ -6,8 +6,9 @@ percakapan sebelumnya. Detail cara pakai alat ada di `doctor_idol/README.md`.
 > **Pembaruan 8 Nov 2026 (mengalahkan bagian di bawah bila berbeda).**
 > Pekerjaan berlanjut di branch `claude/doctor-idol-s4-fancam-fdc89c`, worktree
 > `.claude/worktrees/doctor-idol-s4-fancam-fdc89c`; lihat `logs/2026-11-08.md`
-> untuk status terbaru. 16 reel dan 16 versi YouTube sudah jadi dan siap
-> diunggah manual oleh user. Versi YouTube ada di
+> untuk status terbaru dan cara melanjutkan. Seri dipublikasikan otomatis dari
+> box `armbian`, 3 tayangan per hari, 8-13 Nov 2026; TikTok tetap manual lewat
+> kiriman Telegram. Versi YouTube ada di
 > `media/doctor-idol-s4/youtube/<slug>/`. Semua finalis `approved`, bernomor
 > episode, lagu dan kota lengkap. Satu keraguan tersisa: nama band finalis-10
 > "This Is Joy (?)", ditutup disclaimer caption. Lirik live bisa dibaca Whisper
