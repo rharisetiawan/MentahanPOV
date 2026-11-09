@@ -363,7 +363,9 @@ def token_ok(platform: str, ready: dict, alerts: dict) -> bool:
 def post_next(queue: list[dict], done: dict, alerts: dict, ready: dict, now: dt.datetime) -> int:
     """Act on the first item that still owes something, in order, so no platform posts out of sequence."""
     last = done.get("_last_post")
-    blocked = False  # an earlier item waits on a token: later ones may only send their TikTok kit
+    # Platforms where an earlier item still waits: they must not post a later one first.
+    # Each platform keeps its own order; the others carry on.
+    blocked: set[str] = set()
     for item in queue:
         state = done.get(item["key"], {})
         # A "started" left behind means a run died mid-post: never repeat, ask a human.
@@ -380,19 +382,19 @@ def post_next(queue: list[dict], done: dict, alerts: dict, ready: dict, now: dt.
         at = dt.datetime.fromisoformat(item["at"])
         if at > now:
             return 0
-        go = [] if blocked else [p for p in pending if token_ok(p, ready, alerts)]
+        go = [p for p in pending if p not in blocked and token_ok(p, ready, alerts)]
         # Catching up after an outage: space posts out instead of a burst.
         if go and now - at > dt.timedelta(minutes=20) and last and \
                 now - dt.datetime.fromisoformat(last) < CATCH_UP_GAP:
+            blocked.update(go)
             go = []
+        blocked.update(p for p in pending if p not in go)
         if go or tiktok:
             post_item(item, done, go, tiktok)
             if go:
                 done["_last_post"] = now.isoformat()
                 save(done)
             return 0
-        if pending:
-            blocked = True  # waiting on a token: later items must not jump the queue
     return 0
 
 
