@@ -29,7 +29,9 @@ import requests  # noqa: E402
 
 from config import config  # noqa: E402
 from core import gdrive  # noqa: E402
+from core import threads_token  # noqa: E402
 from distributors import facebook, instagram, threads, youtube  # noqa: E402
+from distributors.meta_graph import graph_url  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 QUEUE = HERE / "queue.json"
@@ -41,8 +43,8 @@ YT_QUEUE = HERE / "youtube_queue.json"
 YT_ITEMS = HERE / "yt_items.json"
 DAILY_UPLOADS = 8  # per 24 hours: the channel's upload limit is shared with the bot's own posts
 PLATFORMS = ("instagram", "facebook", "threads")
-# Older than this and it is no longer "today's" post: ask instead of posting late.
-MAX_LATE = dt.timedelta(hours=12)
+# Late posts (box down, token dead) still go out, but at least this far apart.
+CATCH_UP_GAP = dt.timedelta(minutes=45)
 
 
 def telegram_base() -> str:
@@ -109,7 +111,7 @@ def watch() -> int:
     queue = load(QUEUE, [])
     done = load(DONE, {})
     finished = plan and queue and all(uploaded.get(i["key"], {}).get("verified") or f"public:{i['key']}" in alerts for i in plan) \
-        and all(i["key"] in done for i in queue)
+        and all({*PLATFORMS, "tiktok"} <= set(done.get(i["key"], {})) for i in queue)
     if finished:
         alert_once(alerts, "all-done", "Seri selesai tayang. File /etc/cron.d/mentahanpov-doctor-idol boleh dihapus.")
     ALERTS.write_text(json.dumps(alerts, indent=1), encoding="utf-8")
@@ -132,7 +134,7 @@ def download(svc, file_id: str, out: Path) -> None:
             _, finished = loader.next_chunk(num_retries=3)
 
 
-def post_item(item: dict, done: dict) -> None:
+def post_item(item: dict, done: dict, platforms: list[str], tiktok: bool) -> None:
     key = item["key"]
     state = done.setdefault(key, {})
     svc = gdrive._service()
@@ -141,9 +143,11 @@ def post_item(item: dict, done: dict) -> None:
         video = Path(tmp) / f"{key}.mp4"
         try:
             download(svc, item["drive_id"], video)
-            permission = svc.permissions().create(
-                fileId=item["drive_id"], body={"role": "reader", "type": "anyone"}, fields="id").execute()["id"]
-            for platform, module in (("instagram", instagram), ("facebook", facebook), ("threads", threads)):
+            if platforms:  # only Meta fetches by URL; the TikTok kit uses the local copy
+                permission = svc.permissions().create(
+                    fileId=item["drive_id"], body={"role": "reader", "type": "anyone"}, fields="id").execute()["id"]
+            modules = {"instagram": instagram, "facebook": facebook, "threads": threads}
+            for platform, module in ((p, modules[p]) for p in platforms):
                 # Written first: if this process dies mid-post the next run must not repeat it.
                 state[platform] = {"status": "started"}
                 save(done)
@@ -159,8 +163,9 @@ def post_item(item: dict, done: dict) -> None:
                     state[platform] = {"status": "posted", "url": result.get("url", "")}
                     print(f"{key} tayang di {platform}: {result.get('url', '')}", flush=True)
                 save(done)
-            send_tiktok_kit(item, video, state)
-            save(done)
+            if tiktok:
+                send_tiktok_kit(item, video, state)
+                save(done)
         finally:
             if permission:
                 svc.permissions().delete(fileId=item["drive_id"], permissionId=permission).execute()
@@ -322,29 +327,72 @@ def main() -> int:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             return 0  # the previous run is still posting
-        done = json.loads(DONE.read_text(encoding="utf-8")) if DONE.exists() else {}
+        done = load(DONE, {})
+        alerts = load(ALERTS, {})
         now = dt.datetime.now(dt.timezone.utc)
-        for item in queue:
-            state = done.get(item["key"], {})
-            if state:
-                # A "started" left behind means a run died mid-post: never repeat, ask a human.
-                stuck = [p for p, s in state.items() if s["status"] == "started"]
-                if stuck:
-                    for platform in stuck:
-                        state[platform] = {"status": "unknown"}
-                    save(done)
-                    notify(f"{item['key']}: proses terhenti saat posting ke {stuck}. Cek akunnya, tidak dicoba ulang.")
-                continue
-            at = dt.datetime.fromisoformat(item["at"])
-            if at > now:
-                return 0
-            if now - at > MAX_LATE:
-                done[item["key"]] = {p: {"status": "skipped-late"} for p in PLATFORMS}
-                save(done)
-                notify(f"{item['key']} terlewat (jadwal {item['at']}), box mungkin mati. Tidak diposting.")
-                continue
-            post_item(item, done)
+        ready: dict[str, bool] = {}
+        try:
+            return post_next(queue, done, alerts, ready, now)
+        finally:
+            ALERTS.write_text(json.dumps(alerts, indent=1), encoding="utf-8")
+
+
+def token_ok(platform: str, ready: dict, alerts: dict) -> bool:
+    """Is the platform's token alive? Asked once per run. A dead one holds posts instead of failing them."""
+    group = "threads" if platform == "threads" else "meta"
+    if group not in ready:
+        if group == "meta":
+            url, token = graph_url(config.ig_user_id), config.fb_page_access_token
+        else:
+            url, token = f"https://graph.threads.net/{config.threads_api_version}/me", threads_token.current()
+        try:
+            resp = requests.get(url, params={"fields": "id", "access_token": token}, timeout=30)
+            ready[group] = resp.ok
+            dead = resp.status_code in (400, 401) and resp.json().get("error", {}).get("code") == 190
+        except (requests.RequestException, ValueError):
+            ready[group], dead = False, False  # network trouble: just try next run
+        if ready[group]:
+            alerts.pop(f"token:{group}", None)  # so the next outage alerts again
+        elif dead:
+            names = "Threads" if group == "threads" else "Instagram dan Facebook"
+            alert_once(alerts, f"token:{group}", f"Token {names} ditolak Meta (sesi dibatalkan). Posting ditahan, "
+                       "bukan dibatalkan, dan otomatis menyusul setelah token baru dipasang.")
+    return ready[group]
+
+
+def post_next(queue: list[dict], done: dict, alerts: dict, ready: dict, now: dt.datetime) -> int:
+    """Act on the first item that still owes something, in order, so no platform posts out of sequence."""
+    last = done.get("_last_post")
+    blocked = False  # an earlier item waits on a token: later ones may only send their TikTok kit
+    for item in queue:
+        state = done.get(item["key"], {})
+        # A "started" left behind means a run died mid-post: never repeat, ask a human.
+        stuck = [p for p, s in state.items() if s.get("status") == "started"]
+        if stuck:
+            for platform in stuck:
+                state[platform] = {"status": "unknown"}
+            save(done)
+            notify(f"{item['key']}: proses terhenti saat posting ke {stuck}. Cek akunnya, tidak dicoba ulang.")
+        pending = [p for p in PLATFORMS if p not in state]
+        tiktok = "tiktok" not in state
+        if not pending and not tiktok:
+            continue
+        at = dt.datetime.fromisoformat(item["at"])
+        if at > now:
             return 0
+        go = [] if blocked else [p for p in pending if token_ok(p, ready, alerts)]
+        # Catching up after an outage: space posts out instead of a burst.
+        if go and now - at > dt.timedelta(minutes=20) and last and \
+                now - dt.datetime.fromisoformat(last) < CATCH_UP_GAP:
+            go = []
+        if go or tiktok:
+            post_item(item, done, go, tiktok)
+            if go:
+                done["_last_post"] = now.isoformat()
+                save(done)
+            return 0
+        if pending:
+            blocked = True  # waiting on a token: later items must not jump the queue
     return 0
 
 
