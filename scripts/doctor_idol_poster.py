@@ -21,6 +21,7 @@ import fcntl
 import json
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, "/app")
@@ -44,7 +45,7 @@ YT_ITEMS = HERE / "yt_items.json"
 DAILY_UPLOADS = 8  # per 24 hours: the channel's upload limit is shared with the bot's own posts
 PLATFORMS = ("instagram", "facebook", "threads")
 # Late posts (box down, token dead) still go out, but at least this far apart.
-CATCH_UP_GAP = dt.timedelta(minutes=45)
+CATCH_UP_GAP = dt.timedelta(minutes=20)
 
 
 def telegram_base() -> str:
@@ -146,7 +147,7 @@ def post_item(item: dict, done: dict, platforms: list[str], tiktok: bool) -> Non
             if platforms:  # only Meta fetches by URL; the TikTok kit uses the local copy
                 permission = svc.permissions().create(
                     fileId=item["drive_id"], body={"role": "reader", "type": "anyone"}, fields="id").execute()["id"]
-            modules = {"instagram": instagram, "facebook": facebook, "threads": threads}
+            modules = {"instagram": instagram, "facebook": FacebookReel, "threads": threads}
             for platform, module in ((p, modules[p]) for p in platforms):
                 # Written first: if this process dies mid-post the next run must not repeat it.
                 state[platform] = {"status": "started"}
@@ -169,6 +170,54 @@ def post_item(item: dict, done: dict, platforms: list[str], tiktok: bool) -> Non
         finally:
             if permission:
                 svc.permissions().delete(fileId=item["drive_id"], permissionId=permission).execute()
+
+
+class FacebookReel:
+    """Page Reels API, fetching from the shared Drive URL like Instagram does.
+
+    The /videos upload the bot uses left every vertical clip of this series as an
+    empty, never-published video (status "error", length 0), while still
+    returning an id, so posts looked done. Reels have their own endpoint; this
+    uses it and only reports success once Facebook says the video is ready.
+    """
+
+    @staticmethod
+    def post(video_path: Path, caption: str, *, post_url: str, **_) -> dict[str, str]:
+        token = config.fb_page_access_token
+        endpoint = graph_url(f"{config.fb_page_id}/video_reels")
+        start = requests.post(endpoint, data={"upload_phase": "start", "access_token": token}, timeout=60)
+        if not start.ok:
+            raise RuntimeError(f"reel start HTTP {start.status_code}: {start.text[:200]}")
+        video_id = start.json()["video_id"]
+        upload = requests.post(f"https://rupload.facebook.com/video-upload/{config.graph_api_version}/{video_id}",
+                               headers={"Authorization": f"OAuth {token}", "file_url": post_url}, timeout=300)
+        if not upload.ok:
+            raise RuntimeError(f"reel upload HTTP {upload.status_code}: {upload.text[:200]}")
+        status = FacebookReel.wait(video_id, token, "uploading_phase")
+        finish = requests.post(endpoint, timeout=60, data={
+            "upload_phase": "finish", "video_id": video_id, "video_state": "PUBLISHED",
+            "description": caption, "access_token": token})
+        if not finish.ok:
+            raise RuntimeError(f"reel finish HTTP {finish.status_code}: {finish.text[:200]}")
+        status = FacebookReel.wait(video_id, token, "publishing_phase")
+        if status.get("video_status") != "ready":
+            raise RuntimeError(f"reel {video_id} tidak tayang: {json.dumps(status)[:300]}")
+        return {"id": video_id, "url": f"https://www.facebook.com/reel/{video_id}"}
+
+    @staticmethod
+    def wait(video_id: str, token: str, phase: str, timeout: int = 600) -> dict:
+        deadline = time.time() + timeout
+        status: dict = {}
+        while time.time() < deadline:
+            resp = requests.get(graph_url(video_id), params={"fields": "status", "access_token": token}, timeout=30)
+            status = resp.json().get("status", {}) if resp.ok else {}
+            state = status.get(phase, {}).get("status")
+            if state == "complete" and (phase != "publishing_phase" or status.get("video_status") == "ready"):
+                return status
+            if state == "error" or status.get("video_status") == "error":
+                raise RuntimeError(f"reel {video_id} error di {phase}: {json.dumps(status)[:300]}")
+            time.sleep(10)
+        raise RuntimeError(f"reel {video_id} belum selesai {phase} setelah {timeout} detik: {json.dumps(status)[:200]}")
 
 
 def send_tiktok_kit(item: dict, video: Path, state: dict) -> None:
