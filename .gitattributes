@@ -1,3 +1,4 @@
 # Shell scripts run on the Linux box: keep LF even when checked out on Windows
 # (a CRLF shebang line makes /bin/sh fail with "bad interpreter").
 *.sh text eol=lf
+graphify-out/graph.json merge=graphify

@@ -23,3 +23,6 @@ incoming/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# graphify output (rebuild with: graphify update .)
+graphify-out/
